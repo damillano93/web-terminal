@@ -1,0 +1,23 @@
+services:
+  web-terminal:
+    build: .
+    # Or use a published image instead of building:
+    # image: ghcr.io/OWNER/web-terminal:latest
+    ports:
+      - "7681:7681"
+    environment:
+      # ── pick at least one auth method (see .env.example for all vars) ──
+      # WEB_TERMINAL_PASSWORD is read from the .env file below.
+      WEB_TERMINAL_PASSWORD: ${WEB_TERMINAL_PASSWORD:?set WEB_TERMINAL_PASSWORD in .env}
+      WEB_TERMINAL_SECRET: ${WEB_TERMINAL_SECRET:?run: openssl rand -hex 32}
+      WEB_TERMINAL_USER: ${WEB_TERMINAL_USER:-user}
+      # For a public hostname behind a proxy, also set:
+      # WEB_TERMINAL_ORIGIN: https://terminal.example.com
+      BIND: 0.0.0.0
+      PORT: 7681
+    volumes:
+      - wt-data:/data
+    restart: unless-stopped
+
+volumes:
+  wt-data:

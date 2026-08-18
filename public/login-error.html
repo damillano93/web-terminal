@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>terminal · login failed</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233fb950' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='2' y='3' width='20' height='18' rx='2.2'/><polyline points='7 9 11 13 7 17'/><line x1='13' y1='17' x2='17' y2='17'/></svg>" />
+<style>
+  :root { --bg:#0d1117; --fg:#e6edf3; --muted:#7d8590; --border:#30363d; --accent:#2f81f7; --error:#f85149; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif; display: flex; align-items: center; justify-content: center; }
+  .card { width: min(380px, 92vw); border: 1px solid var(--border); border-radius: 12px; padding: 28px; background: #0d1117; box-shadow: 0 8px 28px rgba(0,0,0,.45); text-align: center; }
+  h1 { margin: 0 0 8px 0; font-size: 1.2em; font-weight: 600; }
+  .err { color: var(--error); font-size: 0.95em; margin-bottom: 18px; }
+  a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Wrong password</h1>
+    <div class="err">Authentication failed.</div>
+    <a href="/login">← Try again</a>
+  </div>
+</body>
+</html>

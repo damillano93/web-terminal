@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!-- viewport-fit=cover lets the page paint under the notch and home indicator;
+     the safe-area insets in style.css keep the chrome out from under them.
+     maximum-scale/user-scalable stop the double-tap and focus zoom that make a
+     terminal unusable on touch — Safari honours them in a home-screen app, and
+     ignores them in the browser, which is the accessible thing to do. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>terminal</title>
+
+<!-- Home-screen app. `apple-mobile-web-app-capable` is what actually makes iOS
+     launch this without Safari's chrome; the manifest covers everything else and
+     is what iOS 16.4+ and Chrome read. black-translucent means the status bar
+     floats over the page, so the tab bar must pad itself by safe-area-inset-top. -->
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Terminal" />
+<meta name="format-detection" content="telephone=no" />
+<!-- Overwritten from the live palette on boot; this is only the cold-start value. -->
+<meta name="theme-color" content="#0d1117" />
+<link rel="apple-touch-icon" href="/icons/icon-180.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233fb950' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='2' y='3' width='20' height='18' rx='2.2'/><polyline points='7 9 11 13 7 17'/><line x1='13' y1='17' x2='17' y2='17'/></svg>" />
+<script>
+/* Apply the saved theme before the first paint. Deferring this to app.js makes
+   the page flash dark then light, and on e-paper that flash is a full, slow
+   panel refresh — the most unpleasant thing the screen can do.
+
+   The server substitutes the signed-in account's prefs for the null below, so a
+   browser that has never seen this app still paints the right theme on the very
+   first load. localStorage is the fallback for a cached page. Only the coarse
+   light/dark ground is set here; app.js fills in the exact palette, which is all
+   the flash actually depends on. */
+(function () {
+  /* Zen hides every bar. Applied here so the bars never flash in before app.js
+     removes them. Per device on purpose — worth it on an iPad, rarely on a big
+     monitor — so it lives in localStorage rather than the account's prefs. */
+  try { if (localStorage.getItem("wt.zen.v1") === "1") document.documentElement.classList.add("zen"); } catch (e) {}
+
+  var p = /*__WT_PREFS__*/null;
+  /* Handed to app.js, which treats it as authoritative over the localStorage
+     cache — it is the account's setting, not this browser's. */
+  window.__WT_PREFS__ = p;
+  try {
+    if (!p) p = JSON.parse(localStorage.getItem("wt.prefs.v1") || "null");
+    if (!p) {
+      var legacy = localStorage.getItem("wt.theme");   /* pre-Gogh setting */
+      if (legacy === "eink") p = { themeId: "eink" };
+    }
+  } catch (e) {}
+  if (!p || !p.themeId) return;
+  /* Tints the iOS status bar and the Android task-switcher card. Wrong here
+     means a bright white bar hanging over a dark terminal. */
+  var tc = document.querySelector('meta[name="theme-color"]');
+  if (tc && /^#[0-9a-fA-F]{6}$/.test(p.bg || "")) tc.setAttribute("content", p.bg);
+  if (p.themeId === "eink") {
+    document.documentElement.setAttribute("data-theme", "eink");
+  } else if (/^#[0-9a-fA-F]{6}$/.test(p.bg || "")) {
+    /* bg/fg/variant ride along with the prefs purely as paint hints: the theme
+       catalog lives in app.js, and waiting for that bundle is exactly the delay
+       this script exists to avoid. */
+    document.documentElement.setAttribute("data-theme", p.variant === "light" ? "light" : "dark");
+    document.documentElement.style.setProperty("--bg", p.bg);
+    if (/^#[0-9a-fA-F]{6}$/.test(p.fg || "")) document.documentElement.style.setProperty("--fg", p.fg);
+  }
+})();
+</script>
+<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/lib/xterm.css" />
+</head>
+<body>
+  <div class="tabs-bar" id="tabs-bar">
+    <div class="tabs-list" id="tabs-list"></div>
+    <button class="tab-add" id="tab-add" title="New tab">+</button>
+    <button class="menu-fab" id="menu-fab" aria-label="Menu" title="Menu">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+
+  <main id="root"></main>
+
+  <!-- Termux-style extra keys. A phone keyboard has no Esc, Tab, Ctrl or arrows,
+       which rules out vim, Ctrl-C and shell history. Populated by app.js; CSS
+       decides whether a viewport is phone-sized enough to show it. -->
+  <div id="keybar" aria-label="Terminal keys"></div>
+
+  <!-- The only way out of zen mode that does not require knowing a shortcut.
+       Rendered always, shown only in zen (see .zen rules in style.css) — with no
+       tab bar and no pane bar on screen, a discoverable exit is not optional. -->
+  <button id="zen-exit" type="button" aria-label="Exit zen mode" title="Exit zen mode (Cmd/Ctrl+Shift+Z)">⤢</button>
+
+  <div id="menu-root"></div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
