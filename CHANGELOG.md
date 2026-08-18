@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-08-18
+
+### Security
+- Update `ws` to 8.21.3 (fixes a high-severity uninitialized-memory disclosure
+  and two DoS advisories in the WebSocket layer) and `express` to 4.22.2
+  (vulnerable `qs`). Dev-only `esbuild` bumped to 0.28.2. `npm audit`: 0.
+
 ## [0.1.0] — 2026-08-18
 
 First packaged, self-hostable release.
@@ -35,5 +42,6 @@ First packaged, self-hostable release.
 - Security headers set at the origin (`nosniff`, `X-Frame-Options: DENY`,
   `Referrer-Policy`, COOP, and HSTS over HTTPS).
 
-[Unreleased]: https://example.com/compare/v0.1.0...HEAD
+[Unreleased]: https://example.com/compare/v0.1.1...HEAD
+[0.1.1]: https://example.com/releases/tag/v0.1.1
 [0.1.0]: https://example.com/releases/tag/v0.1.0
