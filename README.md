@@ -25,7 +25,17 @@ Frontend is [xterm.js](https://xtermjs.org); backend is Node + Express +
 
 ---
 
-## Quick start
+## Quick start (guided installer)
+
+The easiest way — it asks local vs Docker, the auth method, and the settings it
+needs, writes a `chmod 600 .env`, and builds/runs for you:
+
+```bash
+git clone <your-repo-url> web-terminal && cd web-terminal
+bash install.sh
+```
+
+## Quick start (manual)
 
 Requires **Node ≥ 20**. Pick an auth method (a password is simplest):
 
