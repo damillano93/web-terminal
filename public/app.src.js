@@ -25,6 +25,8 @@ const ICON_PATHS = {
   arrowRight: '<path d="M5 12h14M12 5l7 7-7 7"/>',
   enter: '<path d="M20 4v7a4 4 0 0 1-4 4H4M9 10l-5 5 5 5"/>',
   keyboardHide: '<rect x="2" y="2" width="20" height="13" rx="2"/><path d="M6 6h.01M10 6h.01M14 6h.01M18 6h.01M7 11h10M9 19l3 3 3-3"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
   rows: '<rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="13" width="18" height="6" rx="1.5"/>',
   keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>',
   copy: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
@@ -1198,6 +1200,7 @@ class Pane {
     }, { passive: true });
 
     this.installTouchScroll();
+    installContextMenu(this);
   }
 
   setStatus(text, isError) {
@@ -1714,6 +1717,8 @@ class Pane {
   }
 
   connect() {
+    // A reconnect timer and wt.reconnect() can both land here; one socket is enough.
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
     if (this.disposed || this._ondataAttached) {
       // Avoid attaching term.onData twice across reconnects.
     }
@@ -1791,12 +1796,13 @@ class Pane {
         this.setStatus(`exited (code=${m.exitCode ?? "?"})`);
         closeExitedPane(this);
       } else if (m.t === "pong") {
-        // ignore
+        this._pongAt = Date.now();
       }
     };
 
     if (!this._ondataAttached) {
       this.term.onData((d) => this.sendInput(d));
+      try { this.term.onBell(() => nativePost({ type: "bell" })); } catch (_) {}
       this._ondataAttached = true;
     }
   }
@@ -1904,6 +1910,29 @@ class Pane {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try { this.ws.send(JSON.stringify({ t: "i", d })); } catch (_) {}
     }
+  }
+
+  // Called when the app returns to the foreground. iOS kills sockets while the
+  // app is suspended but can leave them looking OPEN, so probe with a ping and
+  // drop the socket if no pong comes back quickly; a closed one reconnects now
+  // instead of waiting out the backoff.
+  reconnectNow() {
+    if (this.disposed) return;
+    this._reconnectAttempts = 0;
+    const ws = this.ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      this._reconnectScheduled = false;
+      this.connect();
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const sent = Date.now();
+    try { ws.send(JSON.stringify({ t: "ping" })); } catch (_) {}
+    setTimeout(() => {
+      if (this.ws === ws && ws.readyState === WebSocket.OPEN && !(this._pongAt >= sent)) {
+        try { ws.close(); } catch (_) {}
+      }
+    }, 1500);
   }
 
   scheduleReconnect() {
@@ -2399,6 +2428,7 @@ function renderTabBar() {
   // Atomic swap — no partial state ever visible, and no stale listeners can
   // survive because we don't attach any per-tab listeners here anymore.
   list.replaceChildren(frag);
+  reportTabsToNative();
 }
 
 // Move tab `tabId` to sit at `targetIdx` in the tabs array (index in the
@@ -2592,8 +2622,148 @@ function bootFresh() {
   activateTab(tab.id);
 }
 
+// ---------------------------------------------------------------------------
+// Native app bridge (ios/). The app injects window.__WT_NATIVE__ and listens on
+// the "wtEvent" message handler; it drives the page through window.wt. In a
+// plain browser nativePost is a no-op and window.wt is just unused.
+// ---------------------------------------------------------------------------
+const IS_NATIVE = !!window.__WT_NATIVE__;
+function nativePost(msg) {
+  try { window.webkit.messageHandlers.wtEvent.postMessage(msg); } catch (_) {}
+}
+
+let _tabsReportTimer = null;
+function reportTabsToNative() {
+  if (!IS_NATIVE) return;
+  clearTimeout(_tabsReportTimer);
+  _tabsReportTimer = setTimeout(() => {
+    nativePost({
+      type: "tabs",
+      workspace: WORKSPACE_ID,
+      active: activeTabId,
+      tabs: tabs.map((t) => ({ id: t.id, name: t.name })),
+    });
+  }, 300);
+}
+
+function pasteIntoActive(text) {
+  if (text && activePane && activePane.term) {
+    try { activePane.term.paste(text); activePane.term.focus(); } catch (_) {}
+  }
+}
+
+window.wt = {
+  newTab() { const t = createTab(); activateTab(t.id); },
+  closeTab() { if (activeTabId != null) closeTab(activeTabId); },
+  // 1-based position, like Cmd+1…9; 9 is always the last tab.
+  switchTab(n) {
+    const t = n >= 9 ? tabs[tabs.length - 1] : tabs[n - 1];
+    if (t) activateTab(t.id);
+  },
+  switchTabId(id) { if (tabs.some((t) => t.id === id)) activateTab(id); },
+  split(dir) { if (activePane) splitPane(activePane, dir === "down" ? "col" : "row"); },
+  find() { if (activePane) activePane.openSearch(); },
+  clear() { try { activePane && activePane.term.clear(); } catch (_) {} },
+  reconnect() { for (const t of tabs) forEachPane(t.layoutRoot, (p) => p.reconnectNow()); },
+  pasteText: pasteIntoActive,
+  pasteImage(base64, mime) {
+    if (!activePane) return;
+    try {
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const ext = (mime.split("/")[1] || "png").replace("jpeg", "jpg");
+      activePane.uploadImages([new File([bytes], "pasted." + ext, { type: mime })]);
+    } catch (_) {}
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Context menu: right-click (trackpad / mouse) or long-press on a terminal.
+// Only in the iOS app and on touch devices; a desktop browser keeps its own.
+// ---------------------------------------------------------------------------
+function closeContextMenu() {
+  const m = document.getElementById("wt-ctx");
+  if (m) m.remove();
+}
+
+function openContextMenu(pane, x, y) {
+  closeContextMenu();
+  setActive(pane);
+  const sel = pane.term && pane.term.getSelection ? pane.term.getSelection() : "";
+  const items = [];
+  if (sel) items.push(["copy", "copy", "Copiar"]);
+  items.push(["paste", "clipboard", "Pegar"]);
+  if (IS_NATIVE) items.push(["paste-image", "image", "Pegar imagen"]);
+  items.push(["find", "search", "Buscar"]);
+  items.push(["clear", "x", "Limpiar"]);
+
+  const menu = document.createElement("div");
+  menu.id = "wt-ctx";
+  menu.className = "ctx-menu";
+  menu.innerHTML = items.map(([act, ic, label]) =>
+    '<button type="button" data-act="' + act + '">' + icon(ic) + "<span>" + label + "</span></button>").join("");
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(6, Math.min(x, innerWidth - r.width - 6)) + "px";
+  menu.style.top = Math.max(6, Math.min(y, innerHeight - r.height - 6)) + "px";
+
+  menu.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    const act = b.dataset.act;
+    closeContextMenu();
+    if (act === "copy") {
+      const text = tidySelection(sel);
+      if (IS_NATIVE) nativePost({ type: "copy", text });
+      else copyToClipboard(text);
+      pane.flashStatus(`Copiado · ${text.length} caracteres`);
+    } else if (act === "paste") {
+      if (IS_NATIVE) nativePost({ type: "paste", image: false });
+      else if (navigator.clipboard && navigator.clipboard.readText) navigator.clipboard.readText().then(pasteIntoActive).catch(() => {});
+    } else if (act === "paste-image") {
+      nativePost({ type: "paste", image: true });
+    } else if (act === "find") {
+      pane.openSearch();
+    } else if (act === "clear") {
+      try { pane.term.clear(); } catch (_) {}
+    }
+    try { pane.term.focus(); } catch (_) {}
+  });
+  setTimeout(() => {
+    const away = (e) => { if (!menu.contains(e.target)) { closeContextMenu(); document.removeEventListener("pointerdown", away, true); } };
+    document.addEventListener("pointerdown", away, true);
+  }, 0);
+}
+
+function installContextMenu(pane) {
+  const touch = window.matchMedia("(hover: none)").matches;
+  if (!IS_NATIVE && !touch) return;
+  pane.host.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openContextMenu(pane, e.clientX, e.clientY);
+  });
+  // Long-press: finger held ~550ms without moving.
+  let timer = null, from = null;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  pane.host.addEventListener("touchstart", (e) => {
+    const t = e.touches && e.touches.length === 1 ? e.touches[0] : null;
+    cancel();
+    if (!t) return;
+    from = { x: t.clientX, y: t.clientY };
+    timer = setTimeout(() => { timer = null; openContextMenu(pane, from.x, from.y); }, 550);
+  }, { passive: true });
+  pane.host.addEventListener("touchmove", (e) => {
+    const t = e.touches && e.touches[0];
+    if (from && t && Math.abs(t.clientX - from.x) + Math.abs(t.clientY - from.y) > 10) cancel();
+  }, { passive: true });
+  pane.host.addEventListener("touchend", cancel, { passive: true });
+  pane.host.addEventListener("touchcancel", cancel, { passive: true });
+}
+
 (async function main() {
   ensureWorkspaceId();
+  nativePost({ type: "workspace", id: WORKSPACE_ID });
   // Before any terminal exists, so the first pane is constructed with the right
   // palette and font instead of being built wrong and repainted.
   loadPrefs();

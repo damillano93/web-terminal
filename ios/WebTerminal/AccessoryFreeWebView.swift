@@ -16,6 +16,10 @@ final class AccessoryFreeWebView: WKWebView {
     private static let subclassName = "WTNoAccessoryContentView"
     private static var assistantKey: UInt8 = 0
 
+    /// Cmd+V / "Paste" with only an image on the pasteboard. WebKit would paste
+    /// nothing into the terminal's textarea, so hand the image to the app.
+    var onPasteImage: ((UIImage) -> Void)?
+
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
         // Belt and braces: whatever the keyboard does, re-check on every show.
@@ -74,6 +78,25 @@ final class AccessoryFreeWebView: WKWebView {
             class_addMethod(made, assistantSel, imp_implementationWithBlock(emptyAssistant),
                             method_getTypeEncoding(class_getInstanceMethod(UIResponder.self, assistantSel)!))
 
+            // paste: — an image-only pasteboard goes to onPasteImage; anything
+            // else takes WebKit's normal path (the original implementation).
+            let pasteSel = #selector(UIResponderStandardEditActions.paste(_:))
+            if let original = class_getMethodImplementation(base, pasteSel) {
+                typealias PasteFn = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
+                let callOriginal = unsafeBitCast(original, to: PasteFn.self)
+                let paste: @convention(block) (AnyObject, AnyObject?) -> Void = { view, sender in
+                    let pb = UIPasteboard.general
+                    if pb.hasImages, !pb.hasStrings, !pb.hasURLs, let image = pb.image,
+                       let web = (view as? UIView)?.enclosingWebView, let handler = web.onPasteImage {
+                        handler(image)
+                    } else {
+                        callOriginal(view, pasteSel, sender)
+                    }
+                }
+                class_addMethod(made, pasteSel, imp_implementationWithBlock(paste),
+                                method_getTypeEncoding(class_getInstanceMethod(base, pasteSel)!))
+            }
+
             objc_registerClassPair(made)
             subclass = made
         }
@@ -90,5 +113,16 @@ private final class EmptyAssistantItem: UITextInputAssistantItem {
     override var trailingBarButtonGroups: [UIBarButtonItemGroup] {
         get { [] }
         set { }
+    }
+}
+
+private extension UIView {
+    var enclosingWebView: AccessoryFreeWebView? {
+        var v: UIView? = superview
+        while let cur = v {
+            if let web = cur as? AccessoryFreeWebView { return web }
+            v = cur.superview
+        }
+        return nil
     }
 }

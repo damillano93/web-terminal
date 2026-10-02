@@ -1,31 +1,37 @@
 import UIKit
 import WebKit
 
-/// Full-screen WKWebView on the web-terminal. What it adds over Safari / the PWA:
-/// no keyboard accessory bar (‹ › ✓), no browser chrome or rubber-banding, a
-/// native clipboard bridge for OSC 52, and links that leave the app open in Safari.
+/// Full-screen WKWebView on the web-terminal. Over Safari / the PWA it adds: no
+/// keyboard bars, iPad keyboard shortcuts, quick reconnect on return, Face ID
+/// lock, an expiry warning, home-screen quick actions, native copy/paste
+/// (images too) and a haptic bell. It drives the page through `window.wt` and
+/// hears from it on the "wtEvent" message handler (see public/app.src.js).
 final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
-    private var webView: WKWebView!
+    private let sceneKey: String
+    private var webView: AccessoryFreeWebView!
     private let background = UIColor(red: 0x0d / 255, green: 0x11 / 255, blue: 0x17 / 255, alpha: 1)
+    private let lock = LockController()
+    private var pageReady = false
+    private var pending: [String] = []
+    private var workspaceID: String?
 
-    private var serverURL: URL {
-        let raw = Bundle.main.object(forInfoDictionaryKey: "WTServerURL") as? String
-        return URL(string: raw ?? "") ?? URL(string: "https://terminal.example.com/")!
+    init(sceneKey: String) {
+        self.sceneKey = sceneKey
+        super.init(nibName: nil, bundle: nil)
     }
+    required init?(coder: NSCoder) { fatalError("not used") }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 
     override func loadView() {
         let config = WKWebViewConfiguration()
-        // Persistent store: the Cloudflare Access and app cookies survive restarts.
-        config.websiteDataStore = .default()
+        config.websiteDataStore = .default()   // Cloudflare Access + app cookies persist
         config.allowsInlineMediaPlayback = true
-        // The page checks for this handler and sends OSC 52 copies here instead
-        // of going through navigator.clipboard.
-        config.userContentController.add(WeakScriptHandler(self), name: "wtClipboard")
-        config.userContentController.addUserScript(WKUserScript(
-            source: "window.__WT_NATIVE__ = { platform: 'ios', version: 1 };",
-            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let ucc = config.userContentController
+        ucc.add(WeakScriptHandler(self), name: "wtClipboard")
+        ucc.add(WeakScriptHandler(self), name: "wtEvent")
+        ucc.addUserScript(WKUserScript(source: "window.__WT_NATIVE__ = { platform: 'ios', version: 2 };",
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         webView = AccessoryFreeWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -36,30 +42,157 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         webView.scrollView.backgroundColor = background
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.customUserAgent = nil
         if #available(iOS 16.4, *) { webView.isInspectable = true }
+        webView.onPasteImage = { [weak self] image in self?.pasteImage(image) }
         view = webView
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = background
-        webView.load(URLRequest(url: serverURL))
+        lock.attach(to: view)
+        loadWorkspace(WorkspaceStore.workspace(scene: sceneKey,
+                                               isOnlyWindow: UIApplication.shared.openSessions.count <= 1))
     }
 
-    // MARK: Hardware keyboard: reload with Cmd+R (Safari would have offered it).
-
-    override var keyCommands: [UIKeyCommand]? {
-        [UIKeyCommand(title: "Recargar", action: #selector(reload), input: "r", modifierFlags: [.command, .shift])]
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        lock.lockOnLaunchIfNeeded()
+        ExpiryWatch.check(from: self)
     }
 
-    @objc private func reload() { webView.reload() }
+    private func loadWorkspace(_ id: String?) {
+        var comps = URLComponents(url: Preferences.serverURL, resolvingAgainstBaseURL: false)!
+        if let id { comps.queryItems = [URLQueryItem(name: "w", value: id)] }
+        pageReady = false
+        webView.load(URLRequest(url: comps.url!))
+    }
 
-    // MARK: Clipboard bridge
+    // MARK: Lifecycle (from SceneDelegate)
+
+    func willEnterForeground() {
+        lock.willEnterForeground()
+        run("wt.reconnect()")
+        ExpiryWatch.check(from: self)
+    }
+
+    func didEnterBackground() { lock.didEnterBackground() }
+
+    // MARK: Talking to the page
+
+    /// Runs JS against window.wt, queued until the page has booted.
+    private func run(_ js: String) {
+        guard pageReady else { pending.append(js); return }
+        webView.evaluateJavaScript("window.wt && (\(js))", completionHandler: nil)
+    }
+
+    private static func jsString(_ s: String) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: [s])
+        let arr = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
+        return String(arr.dropFirst().dropLast())
+    }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == "wtClipboard", let text = message.body as? String {
             UIPasteboard.general.string = text
+            return
+        }
+        guard message.name == "wtEvent", let body = message.body as? [String: Any],
+              let type = body["type"] as? String else { return }
+        switch type {
+        case "workspace":
+            if let id = body["id"] as? String {
+                workspaceID = id
+                WorkspaceStore.remember(id, scene: sceneKey)
+            }
+            pageReady = true
+            let queued = pending; pending = []
+            queued.forEach(run)
+        case "tabs":
+            QuickActions.update(workspace: body["workspace"] as? String,
+                                tabs: (body["tabs"] as? [[String: Any]]) ?? [])
+        case "bell":
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case "copy":
+            if let text = body["text"] as? String { UIPasteboard.general.string = text }
+        case "paste":
+            let wantImage = (body["image"] as? Bool) ?? false
+            let pb = UIPasteboard.general
+            if (wantImage || !pb.hasStrings), let image = pb.image {
+                pasteImage(image)
+            } else if let text = pb.string {
+                run("wt.pasteText(\(Self.jsString(text)))")
+            }
+        default: break
+        }
+    }
+
+    private func pasteImage(_ image: UIImage) {
+        // PNG keeps screenshots crisp; fall back to JPEG for big photos.
+        var data = image.pngData()
+        var mime = "image/png"
+        if (data?.count ?? 0) > 8_000_000 { data = image.jpegData(compressionQuality: 0.85); mime = "image/jpeg" }
+        guard let b64 = data?.base64EncodedString() else { return }
+        run("wt.pasteImage('\(b64)', '\(mime)')")
+    }
+
+    // MARK: Quick actions
+
+    func perform(shortcut: UIApplicationShortcutItem) {
+        switch shortcut.type {
+        case QuickActions.newTab:
+            run("wt.newTab()")
+        case QuickActions.openTab:
+            guard let id = shortcut.userInfo?["id"] as? Int else { return }
+            let ws = shortcut.userInfo?["workspace"] as? String
+            if let ws, ws != workspaceID { loadWorkspace(ws) }
+            run("wt.switchTabId(\(id))")
+        default: break
+        }
+    }
+
+    // MARK: Hardware keyboard (shown in the iPad's hold-⌘ overlay)
+
+    override var keyCommands: [UIKeyCommand]? {
+        var cmds: [UIKeyCommand] = [
+            key("t", .command, "Nueva tab", #selector(newTab)),
+            key("w", .command, "Cerrar tab", #selector(closeTab)),
+            key("d", .command, "Dividir a la derecha", #selector(splitRight)),
+            key("d", [.command, .shift], "Dividir hacia abajo", #selector(splitDown)),
+            key("f", .command, "Buscar", #selector(findInTerminal)),
+            key("k", .command, "Limpiar", #selector(clear)),
+            key("r", [.command, .shift], "Recargar", #selector(reload)),
+            key("n", [.command, .shift], "Nueva ventana", #selector(newWindow)),
+        ]
+        for n in 1...9 {
+            cmds.append(key("\(n)", .command, n == 9 ? "Última tab" : "Tab \(n)", #selector(switchTab(_:))))
+        }
+        return cmds
+    }
+
+    private func key(_ input: String, _ mods: UIKeyModifierFlags, _ title: String, _ action: Selector) -> UIKeyCommand {
+        let c = UIKeyCommand(title: title, action: action, input: input, modifierFlags: mods)
+        c.wantsPriorityOverSystemBehavior = true
+        return c
+    }
+
+    @objc private func newTab() { run("wt.newTab()") }
+    @objc private func closeTab() { run("wt.closeTab()") }
+    @objc private func splitRight() { run("wt.split('right')") }
+    @objc private func splitDown() { run("wt.split('down')") }
+    @objc private func findInTerminal() { run("wt.find()") }
+    @objc private func clear() { run("wt.clear()") }
+    @objc private func reload() { pageReady = false; webView.reload() }
+    @objc private func newWindow() { openNewWindow() }
+    @objc private func switchTab(_ cmd: UIKeyCommand) {
+        if let n = Int(cmd.input ?? "") { run("wt.switchTab(\(n))") }
+    }
+
+    private func openNewWindow() {
+        if UIApplication.shared.supportsMultipleScenes {
+            UIApplication.shared.requestSceneSessionActivation(nil, userActivity: nil, options: nil, errorHandler: nil)
+        } else {
+            run("wt.newTab()")
         }
     }
 
@@ -67,14 +200,15 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
 
     private func isInternal(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return true }   // about:blank, blob:, data:
-        if host == serverURL.host?.lowercased() { return true }
-        return host.hasSuffix(".cloudflareaccess.com")                 // Cloudflare Access login
+        if host == Preferences.serverURL.host?.lowercased() { return true }
+        return host.hasSuffix(".cloudflareaccess.com")
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.allow) }
         if action.targetFrame?.isMainFrame == false || isInternal(url) {
+            if action.targetFrame?.isMainFrame == true { pageReady = false }
             decisionHandler(.allow)
         } else {
             UIApplication.shared.open(url)
@@ -82,22 +216,24 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         }
     }
 
-    // window.open(..., "_blank") — terminal links (Cmd/Ctrl+click) and "new window".
+    // window.open: links (Cmd/Ctrl+click) go to Safari; the menu's "New window"
+    // (a bare "/") opens a second iPad window.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = action.request.url {
-            if isInternal(url) { webView.load(URLRequest(url: url)) } else { UIApplication.shared.open(url) }
+        guard let url = action.request.url else { return nil }
+        if isInternal(url) {
+            let hasWorkspace = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.contains { $0.name == "w" } ?? false
+            if hasWorkspace { webView.load(URLRequest(url: url)) } else { openNewWindow() }
+        } else {
+            UIApplication.shared.open(url)
         }
         return nil
     }
 
-    // Blob downloads (Export pane as HTML) are offered through the share sheet.
-    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {}
-
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { showRetry(error) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { showRetry(error) }
-
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { webView.reload() }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { pageReady = false; webView.reload() }
 
     private func showRetry(_ error: Error) {
         let ns = error as NSError
@@ -106,7 +242,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
                                       message: error.localizedDescription, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Reintentar", style: .default) { [weak self] _ in
             guard let self else { return }
-            self.webView.load(URLRequest(url: self.serverURL))
+            self.loadWorkspace(self.workspaceID)
         })
         present(alert, animated: true)
     }
@@ -144,5 +280,25 @@ private final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
     init(_ target: WKScriptMessageHandler) { self.target = target }
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         target?.userContentController(c, didReceive: m)
+    }
+}
+
+/// Home-screen quick actions: "Nueva tab" plus the first tabs by name.
+enum QuickActions {
+    static let newTab = "webterminal.newtab"
+    static let openTab = "webterminal.tab"
+
+    static func update(workspace: String?, tabs: [[String: Any]]) {
+        var items = [UIApplicationShortcutItem(type: newTab, localizedTitle: "Nueva tab", localizedSubtitle: nil,
+                                               icon: UIApplicationShortcutIcon(systemImageName: "plus"), userInfo: nil)]
+        for t in tabs.prefix(3) {
+            guard let id = t["id"] as? Int, let name = t["name"] as? String else { continue }
+            var info: [String: NSSecureCoding] = ["id": NSNumber(value: id)]
+            if let workspace { info["workspace"] = workspace as NSString }
+            items.append(UIApplicationShortcutItem(type: openTab, localizedTitle: name, localizedSubtitle: nil,
+                                                   icon: UIApplicationShortcutIcon(systemImageName: "terminal"),
+                                                   userInfo: info))
+        }
+        UIApplication.shared.shortcutItems = items
     }
 }

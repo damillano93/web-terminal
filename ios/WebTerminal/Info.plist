@@ -14,6 +14,15 @@
 	<key>LSRequiresIPhoneOS</key><true/>
 	<!-- The web-terminal to open. There is deliberately no in-app URL bar. -->
 	<key>WTServerURL</key><string>https://terminal.example.com/</string>
+	<key>NSFaceIDUsageDescription</key><string>Para desbloquear la terminal.</string>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key><string>webterminal.newtab</string>
+			<key>UIApplicationShortcutItemTitle</key><string>Nueva tab</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key><string>plus</string>
+		</dict>
+	</array>
 	<key>NSCameraUsageDescription</key><string>Para subir una foto a la terminal con el botón de imagen.</string>
 	<key>UILaunchScreen</key>
 	<dict>

@@ -10,6 +10,14 @@ All notable changes to this project are documented here. The format follows
 - `ios/`: native iOS wrapper app (WKWebView) without Safari's keyboard
   accessory bar, with a native clipboard bridge for OSC 52, plus
   `scripts/ios-build.sh` to build, sign and install it on a device.
+- iOS app: iPad keyboard shortcuts (Cmd+T/W/1…9/D/Shift+D/F/K, Cmd+Shift+N
+  new window), instant reconnect when the app returns, each window resumes
+  its own workspace, Face ID / passcode lock (Settings → Terminal), an
+  in-app warning and a notification before the free-account signature
+  expires, home-screen quick actions (new tab + first tabs by name), image
+  paste with Cmd+V, a haptic bell, and a right-click / long-press menu
+  (copy, paste, paste image, find, clear).
+- `window.wt` page API and a `wtEvent` message channel for the app.
 - The whole Gogh catalog (~1250 themes) in the theme picker. The curated 46
   stay bundled; the rest (`public/gogh-themes-all.json`, ~400 KB) loads when
   the picker opens, or at boot when the saved theme is not curated.
