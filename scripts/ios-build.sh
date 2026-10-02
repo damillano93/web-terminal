@@ -21,7 +21,15 @@ if [ -z "${TEAM:-}" ]; then
     | grep -oE 'teamID = [A-Z0-9]{10}' | head -1 | awk '{print $3}' || true)
 fi
 if [ -z "${TEAM:-}" ]; then
-  echo "No Apple ID found in Xcode. Add one in Xcode → Settings → Accounts, or pass TEAM=<id>." >&2
+  # Otherwise from the "Apple Development" certificate Xcode created: its
+  # subject's OU is the team id.
+  TEAM=$(security find-certificate -a -c "Apple Development" -p 2>/dev/null \
+    | openssl x509 -noout -subject 2>/dev/null \
+    | grep -oE 'OU ?= ?[A-Z0-9]{10}' | head -1 | grep -oE '[A-Z0-9]{10}$' || true)
+fi
+if [ -z "${TEAM:-}" ]; then
+  echo "No Apple ID found in Xcode. Add one in Xcode → Settings → Accounts, then" >&2
+  echo "select it → Manage Certificates… → + → Apple Development. Or pass TEAM=<id>." >&2
   exit 1
 fi
 
