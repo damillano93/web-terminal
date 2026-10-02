@@ -8,6 +8,46 @@ import "@xterm/xterm/css/xterm.css";
 // Refresh or extend the list with `npm run themes`.
 import GOGH_THEMES from "./gogh-themes.json";
 
+// ---------------------------------------------------------------------------
+// UI icons — one stroke style everywhere instead of Unicode/emoji glyphs, which
+// render differently on every OS (and as colour emoji on iOS). Paths follow
+// Lucide (https://lucide.dev, ISC licence), 24×24, stroked with currentColor.
+// ---------------------------------------------------------------------------
+const ICON_PATHS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  chevronUp: '<path d="m18 15-6-6-6 6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  chevronsDown: '<path d="m7 6 5 5 5-5M7 13l5 5 5-5"/>',
+  arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  arrowDown: '<path d="M12 5v14M19 12l-7 7-7-7"/>',
+  arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+  arrowRight: '<path d="M5 12h14M12 5l7 7-7 7"/>',
+  enter: '<path d="M20 4v7a4 4 0 0 1-4 4H4M9 10l-5 5 5 5"/>',
+  keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>',
+  copy: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  minimize: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+  window: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20M6 4v4M10 4v4"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  palette: '<path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+  page: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 13H8M16 17H8"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5zM15 5l4 4"/>',
+  splitRight: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
+  splitDown: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+};
+function icon(name, size) {
+  const px = size || 16;
+  return '<svg class="ic" width="' + px + '" height="' + px + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICON_PATHS[name] || "") + "</svg>";
+}
+
 let RENDERER = "xterm.js";
 let TerminalCtor = null;
 let FitAddonCtor = null;
@@ -182,19 +222,19 @@ let pendingThemeId = null;
 // monospace family. Chaining several real fonts as fallbacks would mean picking
 // "Menlo" silently renders as something else on a machine that has both.
 const FONT_STACKS = [
-  { id: "jetbrains-mono", name: "JetBrains Mono", stack: '"JetBrains Mono", ui-monospace, monospace' },
+  { id: "jetbrains-mono", name: "JetBrains Mono", stack: '"JetBrains Mono", ui-monospace, monospace', served: true },
   { id: "sf-mono", name: "SF Mono", stack: '"SF Mono", "SFMono-Regular", ui-monospace, monospace' },
   { id: "menlo", name: "Menlo", stack: 'Menlo, ui-monospace, monospace' },
   { id: "monaco", name: "Monaco", stack: 'Monaco, ui-monospace, monospace' },
-  { id: "fira-code", name: "Fira Code", stack: '"Fira Code", ui-monospace, monospace' },
+  { id: "fira-code", name: "Fira Code", stack: '"Fira Code", ui-monospace, monospace', served: true },
   { id: "cascadia-code", name: "Cascadia Code", stack: '"Cascadia Code", "Cascadia Mono", ui-monospace, monospace' },
-  { id: "ibm-plex-mono", name: "IBM Plex Mono", stack: '"IBM Plex Mono", ui-monospace, monospace' },
+  { id: "ibm-plex-mono", name: "IBM Plex Mono", stack: '"IBM Plex Mono", ui-monospace, monospace', served: true },
   { id: "source-code-pro", name: "Source Code Pro", stack: '"Source Code Pro", ui-monospace, monospace' },
   { id: "hack", name: "Hack", stack: 'Hack, ui-monospace, monospace' },
   { id: "inconsolata", name: "Inconsolata", stack: 'Inconsolata, ui-monospace, monospace' },
   { id: "roboto-mono", name: "Roboto Mono", stack: '"Roboto Mono", ui-monospace, monospace' },
   { id: "ubuntu-mono", name: "Ubuntu Mono", stack: '"Ubuntu Mono", ui-monospace, monospace' },
-  { id: "iosevka", name: "Iosevka", stack: 'Iosevka, ui-monospace, monospace' },
+  { id: "iosevka", name: "Iosevka", stack: 'Iosevka, ui-monospace, monospace', served: true },
   { id: "berkeley-mono", name: "Berkeley Mono", stack: '"Berkeley Mono", ui-monospace, monospace' },
   { id: "courier-new", name: "Courier New", stack: '"Courier New", monospace' },
   { id: "system-mono", name: "System default", stack: 'ui-monospace, monospace' },
@@ -291,6 +331,7 @@ function currentFont() {
 const _fontAvail = new Map();
 function fontIsAvailable(f) {
   if (f.id === "system-mono") return true;   // by definition
+  if (f.served) return true;                 // shipped in /fonts (scripts/build.js)
   if (_fontAvail.has(f.id)) return _fontAvail.get(f.id);
   const first = /^"?([^",]+)"?/.exec(f.stack);
   const ok = first ? measureFontPresent(first[1].trim()) : true;
@@ -418,17 +459,26 @@ function applyFontSettings() {
   r.style.setProperty("--term-font", f.stack);
   r.style.setProperty("--term-font-size", prefs.fontSize + "px");
   if (typeof tabs === "undefined" || !tabs) return;
-  for (const tab of tabs) {
-    forEachPane(tab.layoutRoot, (p) => {
-      if (p.term && p.term.options) {
-        try {
-          p.term.options.fontFamily = f.stack;
-          p.term.options.fontSize = prefs.fontSize;
-        } catch (_) {}
-        try { p.fitNow(); } catch (_) {}
-      }
-    });
+  const each = (fn) => { for (const tab of tabs) forEachPane(tab.layoutRoot, fn); };
+  each((p) => p.refreshFont());
+  fontReady(f).then(() => { if (currentFont() === f) each((p) => p.refreshFont()); });
+}
+
+// Served fonts download on first use, and xterm measures its cell size from
+// whatever is loaded at that moment: render with the fallback, then the real
+// face arrives and every glyph sits on the wrong grid. So load regular + bold
+// explicitly, then make each pane re-measure.
+const _fontLoads = new Map();
+function fontReady(f) {
+  if (!f.served || !document.fonts || !document.fonts.load) return Promise.resolve();
+  if (!_fontLoads.has(f.id)) {
+    const fam = /^"?([^",]+)"?/.exec(f.stack)[1];
+    _fontLoads.set(f.id, Promise.all([
+      document.fonts.load(`400 16px "${fam}"`),
+      document.fonts.load(`700 16px "${fam}"`),
+    ]).catch(() => {}));
   }
+  return _fontLoads.get(f.id);
 }
 
 function setFont(patch) {
@@ -609,7 +659,7 @@ function applyKeybarCollapsed() {
   bar.classList.toggle("collapsed", keybarCollapsed);
   const h = document.getElementById("keybar-toggle");
   if (h) {
-    h.textContent = keybarCollapsed ? "⌨" : "⌄";
+    h.innerHTML = keybarCollapsed ? icon("keyboard") : icon("chevronDown");
     h.setAttribute("aria-label", keybarCollapsed ? "Show keys" : "Hide keys");
   }
   // The terminal just gained or lost ~76px.
@@ -638,7 +688,7 @@ function installKeyBar() {
   const hideKb = document.createElement("button");
   hideKb.type = "button";
   hideKb.className = "keybar-handle-btn";
-  hideKb.textContent = "⌄⌨";
+  hideKb.innerHTML = icon("chevronsDown") + icon("keyboard");
   hideKb.title = "Hide the on-screen keyboard";
   hideKb.setAttribute("aria-label", "Hide the on-screen keyboard");
   // Copy: opens an overlay with the terminal text where iOS's own selection
@@ -647,7 +697,7 @@ function installKeyBar() {
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
   copyBtn.className = "keybar-handle-btn";
-  copyBtn.textContent = "⧉ copiar";
+  copyBtn.innerHTML = icon("copy", 14) + "<span>copiar</span>";
   copyBtn.title = "Copiar texto de la terminal";
   copyBtn.setAttribute("aria-label", "Copiar texto de la terminal");
   handle.appendChild(toggle);
@@ -657,7 +707,7 @@ function installKeyBar() {
   const attachBtn = document.createElement("button");
   attachBtn.type = "button";
   attachBtn.className = "keybar-handle-btn";
-  attachBtn.textContent = "📎 imagen";
+  attachBtn.innerHTML = icon("paperclip", 14) + "<span>imagen</span>";
   attachBtn.title = "Subir una imagen y escribir su ruta";
   attachBtn.setAttribute("aria-label", "Subir una imagen");
   const picker = document.createElement("input");
@@ -713,7 +763,13 @@ function installKeyBar() {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "keybar-key" + (spec.mod ? " keybar-mod" : "") + (spec.big ? " keybar-big" : "");
-      b.textContent = spec.label;
+      const KEY_ICONS = { up: "arrowUp", down: "arrowDown", left: "arrowLeft", right: "arrowRight", enter: "enter" };
+      if (KEY_ICONS[spec.key]) {
+        b.innerHTML = icon(KEY_ICONS[spec.key], spec.big ? 18 : 15);
+        b.setAttribute("aria-label", spec.key);
+      } else {
+        b.textContent = spec.label;
+      }
       if (spec.mod) b.setAttribute("data-mod", spec.mod);
       // pointerdown with preventDefault, not click: it stops the button from
       // taking focus, which would otherwise dismiss the keyboard mid-typing.
@@ -1177,9 +1233,9 @@ class Pane {
     spacer.className = "spacer";
     bar.appendChild(spacer);
 
-    bar.appendChild(btn("⇋", "Split right (Cmd/Ctrl+D)", () => splitPane(this, "row")));
-    bar.appendChild(btn("⇵", "Split down (Cmd/Ctrl+Shift+D)", () => splitPane(this, "col")));
-    const closeBtn = btn("✕", "Close pane (tap twice)", () => {
+    bar.appendChild(btn("icon:splitRight", "Split right (Cmd/Ctrl+D)", () => splitPane(this, "row")));
+    bar.appendChild(btn("icon:splitDown", "Split down (Cmd/Ctrl+Shift+D)", () => splitPane(this, "col")));
+    const closeBtn = btn("icon:x", "Close pane (tap twice)", () => {
       if (confirmCloseTap(closeBtn)) closePane(this);
     }, "danger");
     bar.appendChild(closeBtn);
@@ -1546,6 +1602,20 @@ class Pane {
     });
   }
 
+  // Re-apply the current font and make xterm re-measure the cell (it only does
+  // so when the option changes, hence the detour) and redraw its glyph cache.
+  refreshFont() {
+    if (!this.term || !this.term.options) return;
+    const f = currentFont();
+    try {
+      this.term.options.fontFamily = "monospace";
+      this.term.options.fontFamily = f.stack;
+      this.term.options.fontSize = prefs.fontSize;
+    } catch (_) {}
+    try { this.term.clearTextureAtlas && this.term.clearTextureAtlas(); } catch (_) {}
+    try { this.fitNow(); } catch (_) {}
+  }
+
   // Find bar over the terminal (Cmd+F on macOS, Ctrl+Shift+F elsewhere, since
   // Ctrl+F belongs to the shell). Enter = next, Shift+Enter = previous.
   openSearch() {
@@ -1568,9 +1638,9 @@ class Pane {
     input.spellcheck = false;
     const count = document.createElement("span");
     count.className = "pane-search-count";
-    const prev = btn("↑", "Anterior (Shift+Enter)", () => run(false));
-    const next = btn("↓", "Siguiente (Enter)", () => run(true));
-    const close = btn("✕", "Cerrar (Esc)", () => this.closeSearch());
+    const prev = btn("icon:chevronUp", "Anterior (Shift+Enter)", () => run(false));
+    const next = btn("icon:chevronDown", "Siguiente (Enter)", () => run(true));
+    const close = btn("icon:x", "Cerrar (Esc)", () => this.closeSearch());
     box.append(input, count, prev, next, close);
     this.host.parentElement.appendChild(box);
     this.searchEl = box;
@@ -1631,6 +1701,7 @@ class Pane {
     }
     this.term.open(this.host);
     this.loadAddons();
+    fontReady(currentFont()).then(() => this.refreshFont());
     this.hardenInputElement();
     try { this.term.focus(); } catch (_) {}
 
@@ -2124,12 +2195,12 @@ function confirmCloseTap(button) {
     return true;
   }
   button._armed = true;
-  button._origText = button.textContent;
+  button._origHtml = button.innerHTML;
   button.textContent = "¿Cerrar?";
   button.classList.add("armed");
   button._armTimer = setTimeout(() => {
     button._armed = false;
-    button.textContent = button._origText;
+    button.innerHTML = button._origHtml;
     button.classList.remove("armed");
   }, CLOSE_ARM_MS);
   return false;
@@ -2428,7 +2499,7 @@ function renderTabBar() {
       const close = document.createElement("button");
       close.className = "tab-close";
       close.title = "Close tab (tap twice)";
-      close.textContent = "✕";
+      close.innerHTML = icon("x", 12);
       close.dataset.action = "close";
       // Don't let the close button start a tab-drag.
       close.draggable = false;
@@ -2573,7 +2644,12 @@ function installTabBarDelegates() {
 // ---------------------------------------------------------------------------
 function btn(label, title, onclick, klass) {
   const b = document.createElement("button");
-  b.textContent = label;
+  if (label.startsWith("icon:")) {
+    b.innerHTML = icon(label.slice(5));
+    b.setAttribute("aria-label", title);
+  } else {
+    b.textContent = label;
+  }
   b.title = title;
   if (klass) b.className = klass;
   b.addEventListener("click", (e) => { e.stopPropagation(); onclick(); });
@@ -2706,32 +2782,32 @@ function toggleMenu() {
   const pop = document.createElement("div");
   pop.className = "menu-popover";
   pop.innerHTML =
-    '<button data-act="new-tab">＋ New tab</button>' +
-    '<button data-act="new-window">⧉ New window (fresh workspace)</button>' +
-    '<button data-act="open-existing">📜 Open existing session…</button>' +
-    '<button data-act="appearance">🎨 Appearance…' +
+    '<button data-act="new-tab">' + icon("plus") + 'New tab</button>' +
+    '<button data-act="new-window">' + icon("window") + 'New window (fresh workspace)</button>' +
+    '<button data-act="open-existing">' + icon("history") + 'Open existing session…</button>' +
+    '<button data-act="appearance">' + icon("palette") + 'Appearance…' +
       '<span class="kbd">' + escapeHtml(currentTheme().name) + '</span></button>' +
     // One-tap toggle kept alongside the picker: switching to e-ink is the thing
     // people do outdoors, and hunting for it in a 46-row grid every time is a
     // worse answer than a button.
-    '<button data-act="eink-toggle">' + (isEink() ? "🌙 Back to dark" : "📄 E-ink mode") + '</button>' +
-    '<button data-act="zen">⛶ ' + (zenMode ? "Show bars" : "Zen mode (hide bars)") +
+    '<button data-act="eink-toggle">' + (isEink() ? icon("moon") + "Back to dark" : icon("page") + "E-ink mode") + '</button>' +
+    '<button data-act="zen">' + icon(zenMode ? "minimize" : "maximize") + (zenMode ? "Show bars" : "Zen mode (hide bars)") +
       '<span class="kbd">' + mod + '+Shift+Z</span></button>' +
-    '<button data-act="background">🖼 Background…</button>' +
-    '<button data-act="rename-tab">✎ Rename current tab</button>' +
-    '<button data-act="close-tab" class="danger">✕ Close current tab</button>' +
+    '<button data-act="background">' + icon("image") + 'Background…</button>' +
+    '<button data-act="rename-tab">' + icon("pencil") + 'Rename current tab</button>' +
+    '<button data-act="close-tab" class="danger">' + icon("x") + 'Close current tab</button>' +
     '<div class="sep"></div>' +
-    '<button data-act="split-h">⇋ Split right<span class="kbd">'+mod+'+D</span></button>' +
-    '<button data-act="split-v">⇵ Split down<span class="kbd">'+mod+'+Shift+D</span></button>' +
-    '<button data-act="export-html">⤓ Export pane as HTML</button>' +
-    '<button data-act="close-pane" class="danger">✕ Close active pane</button>' +
+    '<button data-act="split-h">' + icon("splitRight") + 'Split right<span class="kbd">'+mod+'+D</span></button>' +
+    '<button data-act="split-v">' + icon("splitDown") + 'Split down<span class="kbd">'+mod+'+Shift+D</span></button>' +
+    '<button data-act="export-html">' + icon("download") + 'Export pane as HTML</button>' +
+    '<button data-act="close-pane" class="danger">' + icon("x") + 'Close active pane</button>' +
     '<div class="sep"></div>' +
-    '<button data-act="copy-url">🔗 Copy workspace URL</button>' +
+    '<button data-act="copy-url">' + icon("link") + 'Copy workspace URL</button>' +
     '<div class="meta"><span>Workspace</span><span class="v" title="' + WORKSPACE_ID + '">' + WORKSPACE_ID.slice(0, 8) + '…</span></div>' +
     '<div class="meta"><span>Renderer</span><span class="v">' + RENDERER + '</span></div>' +
     (CURRENT_USER ? '<div class="meta"><span>Signed in</span><span class="v" title="' + CURRENT_USER + '">' + CURRENT_USER + '</span></div>' : "") +
     '<div class="sep"></div>' +
-    '<button data-act="logout" class="danger">Sign out</button>';
+    '<button data-act="logout" class="danger">' + icon("logout") + 'Sign out</button>';
   root.appendChild(pop);
 
   pop.querySelectorAll("button[data-act]").forEach((btn) => {

@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format follows
 - OSC 9;4 progress: a thin bar on top of the pane and a percentage on its tab.
 - ☰ → "Export pane as HTML" downloads the pane's scrollback with colours
   (`@xterm/addon-serialize`).
+- JetBrains Mono, Fira Code, IBM Plex Mono and Iosevka are served by the app
+  (`public/fonts`, built from `@fontsource`, SIL OFL), so they look the same on
+  every device without installing anything. Only the chosen face downloads;
+  panes re-measure once it has loaded.
+- One SVG icon set (Lucide paths, ISC) replaces the Unicode/emoji glyphs in
+  the menu, tab bar, key bar, search bar and zen exit.
 - Images into the terminal: drag & drop onto a pane, paste with Cmd/Ctrl+V,
   or the 📎 button on the phone key bar. The image is uploaded to
   `~/.web-terminal/uploads` (`WEB_TERMINAL_UPLOAD_DIR`) and its path is typed

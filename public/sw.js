@@ -9,7 +9,7 @@
 // Safari only registers a worker on a secure context, so this file is simply
 // never used over the plain-http Tailscale path. app.js checks for that.
 
-const CACHE = "wt-static-v1";
+const CACHE = "wt-static-v2";
 
 // Only assets the server stamps with ?v=<mtime>, plus the hashed files esbuild
 // emits into /lib/. A new build changes the URL, so a cached entry can never
@@ -22,6 +22,9 @@ function isCacheable(url) {
   // esbuild's assetNames puts a content hash in the filename itself.
   if (url.pathname.startsWith("/lib/")) return true;
   if (url.pathname.startsWith("/icons/")) return true;
+  // Font files are versioned by the @fontsource release that produced them;
+  // a new release means a new CACHE name above.
+  if (url.pathname.startsWith("/fonts/") && url.pathname.endsWith(".woff2")) return true;
   if (url.pathname === "/gogh-themes.json") return true;
   return false;
 }

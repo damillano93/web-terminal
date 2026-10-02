@@ -174,6 +174,7 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
   white-space: nowrap;
 }
 .tab-add {
+  display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: 0;
   color: var(--muted); cursor: pointer;
   font-size: 1.05em; line-height: 1;
@@ -532,6 +533,7 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 .keybar-handle { display: flex; align-items: center; gap: 4px; height: 16px; }
 .keybar-handle .spacer { flex: 1 1 auto; }
 .keybar-handle-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   background: transparent; border: 0; color: var(--muted);
   font-size: 0.72em; line-height: 1; cursor: pointer;
   padding: 0 14px; border-radius: 5px;
@@ -711,3 +713,12 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
   -webkit-touch-callout: default !important;
   -webkit-overflow-scrolling: touch;
 }
+
+/* ---- SVG icons (see ICON_PATHS in app.src.js) --------------------------- */
+.ic { flex: 0 0 auto; display: block; }
+.menu-popover button .ic { color: var(--muted); }
+.menu-popover button:hover .ic { color: var(--fg); }
+.menu-popover .danger .ic { color: currentColor; }
+.keybar-key .ic { margin: 0 auto; }
+.pane-search button { display: inline-flex; align-items: center; }
+#zen-exit { align-items: center; justify-content: center; }
