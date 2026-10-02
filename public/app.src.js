@@ -1145,7 +1145,10 @@ class Pane {
 
     bar.appendChild(btn("⇋", "Split right (Cmd/Ctrl+D)", () => splitPane(this, "row")));
     bar.appendChild(btn("⇵", "Split down (Cmd/Ctrl+Shift+D)", () => splitPane(this, "col")));
-    bar.appendChild(btn("✕", "Close pane", () => closePane(this), "danger"));
+    const closeBtn = btn("✕", "Close pane (tap twice)", () => {
+      if (confirmCloseTap(closeBtn)) closePane(this);
+    }, "danger");
+    bar.appendChild(closeBtn);
 
     this.el.appendChild(bar);
 
@@ -1994,6 +1997,29 @@ function splitPane(pane, direction) {
   saveWorkspace();
 }
 
+// Two-step close for the ✕ buttons: they sit right next to things you tap all
+// the time (tabs, the pane bar), and closing kills the shell for good. The
+// first tap arms the button ("¿Cerrar?") for a few seconds; only a second tap
+// on the same button closes. Returns true when the caller should close now.
+const CLOSE_ARM_MS = 3000;
+function confirmCloseTap(button) {
+  if (button._armed) {
+    clearTimeout(button._armTimer);
+    button._armed = false;
+    return true;
+  }
+  button._armed = true;
+  button._origText = button.textContent;
+  button.textContent = "¿Cerrar?";
+  button.classList.add("armed");
+  button._armTimer = setTimeout(() => {
+    button._armed = false;
+    button.textContent = button._origText;
+    button.classList.remove("armed");
+  }, CLOSE_ARM_MS);
+  return false;
+}
+
 function closePane(pane) {
   const parent = pane.parent;
   const grand = parent && parent.parent;
@@ -2258,7 +2284,7 @@ function renderTabBar() {
     if (showClose) {
       const close = document.createElement("button");
       close.className = "tab-close";
-      close.title = "Close tab";
+      close.title = "Close tab (tap twice)";
       close.textContent = "✕";
       close.dataset.action = "close";
       // Don't let the close button start a tab-drag.
@@ -2312,9 +2338,10 @@ function installTabBarDelegates() {
     if (!tabEl || !list.contains(tabEl)) return;
     const id = parseInt(tabEl.dataset.tabId, 10);
     if (!Number.isFinite(id)) return;
-    if (e.target.closest(".tab-close")) {
+    const closeBtn = e.target.closest(".tab-close");
+    if (closeBtn) {
       e.stopPropagation();
-      closeTab(id);
+      if (confirmCloseTap(closeBtn)) closeTab(id);
     } else {
       activateTab(id);
     }

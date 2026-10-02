@@ -167,6 +167,12 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 }
 .tab:hover .tab-close, .tab.active .tab-close { opacity: 0.7; }
 .tab-close:hover { opacity: 1; background: rgba(248,81,73,0.18); color: var(--error); }
+/* Armed ✕ (first tap): widen into a visible "¿Cerrar?" until the second tap. */
+.tab-close.armed, .pane-bar button.armed {
+  width: auto; opacity: 1 !important; padding: 2px 6px;
+  background: var(--error); color: #fff; font-size: 0.8em; font-weight: 600;
+  white-space: nowrap;
+}
 .tab-add {
   background: transparent; border: 0;
   color: var(--muted); cursor: pointer;

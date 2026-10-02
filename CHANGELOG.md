@@ -14,6 +14,11 @@ All notable changes to this project are documented here. The format follows
   (converted to JPEG on macOS), up to 25 MB; files older than 7 days are
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
+### Changed
+- Closing a tab or a pane with its ✕ takes two taps: the first turns it into
+  a red "¿Cerrar?" for 3 s, the second closes. Stray taps no longer kill a
+  shell. The menu's close actions are unchanged.
+
 ## [0.2.0] — 2026-10-02
 
 ### Added
