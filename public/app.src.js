@@ -33,12 +33,14 @@ async function loadXterm() {
   TerminalCtor = xt.Terminal;
   FitAddonCtor = fit.FitAddon;
   RENDERER = "xterm.js";
-  const [search, links, unicode, clip, webgl] = await Promise.all([
+  const [search, links, unicode, clip, webgl, image, serialize] = await Promise.all([
     import("@xterm/addon-search"),
     import("@xterm/addon-web-links"),
     import("@xterm/addon-unicode11"),
     import("@xterm/addon-clipboard"),
     import("@xterm/addon-webgl"),
+    import("@xterm/addon-image"),
+    import("@xterm/addon-serialize"),
   ]);
   XtermAddons = {
     Search: search.SearchAddon,
@@ -46,6 +48,8 @@ async function loadXterm() {
     Unicode11: unicode.Unicode11Addon,
     Clipboard: clip.ClipboardAddon,
     Webgl: webgl.WebglAddon,
+    Image: image.ImageAddon,
+    Serialize: serialize.SerializeAddon,
   };
 }
 
@@ -143,6 +147,34 @@ const THEMES = [
 ];
 const THEME_BY_ID = new Map(THEMES.map((t) => [t.id, t]));
 
+// The full Gogh catalog (~1250) is a separate ~400 KB file, fetched only when
+// the picker opens or when the saved theme is not in the curated slice above.
+// Curated themes keep their place at the top; a catalog entry with the same
+// name as one already listed is skipped (upstream renames would otherwise
+// show Tokyo Night twice).
+let _allThemesPromise = null;
+function loadAllThemes() {
+  if (!_allThemesPromise) {
+    _allThemesPromise = fetch("/gogh-themes-all.json", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => {
+        const names = new Set(THEMES.map((t) => t.name.toLowerCase()));
+        for (const t of Array.isArray(list) ? list : []) {
+          if (!t || THEME_BY_ID.has(t.id) || names.has(String(t.name).toLowerCase())) continue;
+          const th = { ...t, special: null, builtin: false, extra: {} };
+          THEMES.push(th);
+          THEME_BY_ID.set(th.id, th);
+        }
+        return THEMES.length;
+      })
+      .catch(() => { _allThemesPromise = null; return THEMES.length; });
+  }
+  return _allThemesPromise;
+}
+// A theme id the user saved that the curated slice cannot resolve; boot loads
+// the full catalog before painting when this is set.
+let pendingThemeId = null;
+
 // ---------------------------------------------------------------------------
 // Fonts — a separate axis from the theme, on purpose (see above).
 // ---------------------------------------------------------------------------
@@ -213,6 +245,8 @@ function loadPrefs() {
   // Server last: it is per-account and therefore authoritative over a cache
   // that belongs to whichever browser happens to be in front of you.
   Object.assign(prefs, validPrefs(window.__WT_PREFS__));
+  const wanted = (window.__WT_PREFS__ && window.__WT_PREFS__.themeId) || (cached && cached.themeId);
+  pendingThemeId = typeof wanted === "string" && !THEME_BY_ID.has(wanted) ? wanted : null;
 }
 
 let _prefsPostTimer = null;
@@ -1314,6 +1348,9 @@ class Pane {
     } catch (_) { this.search = null; }
     // OSC 52: lets vim/tmux/Claude Code put text on the clipboard. Write-only:
     // a process in the shell must never be able to READ the browser clipboard.
+    // The constructor is (base64, provider) despite what the 0.1.0 typings
+    // say; passing the provider first silently falls back to the default one,
+    // which DOES read the clipboard.
     try {
       const pane = this;
       this.term.loadAddon(new A.Clipboard(undefined, {
@@ -1337,7 +1374,78 @@ class Pane {
         },
       }));
     } catch (_) {}
+    try {
+      this.serializer = new A.Serialize();
+      this.term.loadAddon(this.serializer);
+    } catch (_) { this.serializer = null; }
+    this.installProgress();
     this.syncWebgl();
+  }
+
+  // Inline images: Sixel and the iTerm2 protocol (imgcat, chafa, yazi…).
+  // The addon hooks the renderer that is active when it loads, so it must be
+  // (re)loaded after every renderer switch — syncWebgl() calls this. Capped so
+  // a runaway stream cannot eat the tab's memory.
+  reloadImageAddon() {
+    if (!XtermAddons || !this.term) return;
+    try { this.imageAddon && this.imageAddon.dispose(); } catch (_) {}
+    try {
+      this.imageAddon = new XtermAddons.Image({ storageLimit: 64, pixelLimit: 16777216 });
+      this.term.loadAddon(this.imageAddon);
+    } catch (_) { this.imageAddon = null; }
+  }
+
+  // OSC 9;4 progress (ConEmu / Windows Terminal convention, used by winget,
+  // some build tools, and Claude Code-style CLIs): ESC ] 9 ; 4 ; state ; pct BEL.
+  // state 0 = clear, 1 = normal, 2 = error, 3 = indeterminate, 4 = paused.
+  // Shown as a thin bar on top of the pane and a percentage on its tab. Other
+  // OSC 9 payloads (plain notifications) are left alone.
+  installProgress() {
+    try {
+      this.term.parser.registerOscHandler(9, (data) => {
+        const m = /^4;(\d)(?:;(\d{1,3}))?/.exec(data);
+        if (!m) return false;
+        const state = Number(m[1]);
+        const pct = Math.max(0, Math.min(100, Number(m[2] || 0)));
+        this.setProgress(state === 0 ? null : { state, pct });
+        return true;
+      });
+    } catch (_) {}
+  }
+
+  setProgress(p) {
+    const prev = this.progress;
+    this.progress = p;
+    if (!this.progressEl) {
+      this.progressEl = document.createElement("div");
+      this.progressEl.className = "pane-progress";
+      this.host.parentElement.appendChild(this.progressEl);
+    }
+    const el = this.progressEl;
+    el.hidden = !p;
+    if (p) {
+      el.dataset.state = String(p.state);
+      el.style.setProperty("--pct", (p.state === 3 ? 100 : p.pct) + "%");
+    }
+    const changed = !prev !== !p || (p && prev && (p.pct !== prev.pct || p.state !== prev.state));
+    if (changed) renderTabBar();
+  }
+
+  // Whole buffer (scrollback included) as a standalone HTML page, colours kept.
+  exportHtml() {
+    if (!this.serializer) { this.flashStatus("Exportar no está disponible con este renderer", true); return; }
+    let html;
+    try { html = this.serializer.serializeAsHTML({ includeGlobalBackground: true }); } catch (_) { return; }
+    const doc = "<!doctype html><meta charset=\"utf-8\"><title>web-terminal export</title>" +
+      "<style>body{margin:0;background:#000}pre{margin:0;padding:12px;font:13px ui-monospace,monospace}</style>" + html;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
+    const name = (currentTab() && currentTab().name) || "terminal";
+    a.download = name.replace(/[^\w.-]+/g, "_") + "-" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "") + ".html";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    this.flashStatus("Terminal exportada como HTML", false, 2500);
   }
 
   // GPU rendering is far smoother for TUIs (Claude Code, htop), but the WebGL
@@ -1347,12 +1455,18 @@ class Pane {
   syncWebgl() {
     if (!XtermAddons || !this.term) return;
     const want = clamp01(bgSettings.opacity) >= 1 && !bgSettings.image;
+    const had = !!this.webgl;
+    this._syncWebglRenderer(want);
+    if (!this.imageAddon || had !== !!this.webgl) this.reloadImageAddon();
+  }
+
+  _syncWebglRenderer(want) {
     if (want && !this.webgl) {
       try {
         const gl = new XtermAddons.Webgl();
         gl.onContextLoss(() => {
           try { gl.dispose(); } catch (_) {}
-          if (this.webgl === gl) this.webgl = null;
+          if (this.webgl === gl) { this.webgl = null; this.reloadImageAddon(); }
         });
         this.term.loadAddon(gl);
         this.webgl = gl;
@@ -2301,6 +2415,15 @@ function renderTabBar() {
     name.textContent = t.name;
     el.appendChild(name);
 
+    let prog = null;
+    forEachPane(t.layoutRoot, (p) => { if (p.progress && !prog) prog = p.progress; });
+    if (prog) {
+      const pr = document.createElement("span");
+      pr.className = "tab-progress" + (prog.state === 2 ? " error" : "");
+      pr.textContent = prog.state === 2 ? "✕" : prog.state === 3 ? "…" : prog.pct + "%";
+      el.appendChild(pr);
+    }
+
     if (showClose) {
       const close = document.createElement("button");
       close.className = "tab-close";
@@ -2509,6 +2632,7 @@ function bootFresh() {
   // Before any terminal exists, so the first pane is constructed with the right
   // palette and font instead of being built wrong and repainted.
   loadPrefs();
+  if (pendingThemeId) { await loadAllThemes(); loadPrefs(); }
   applyUiTheme();
   applyFontSettings();
   loadBgSettings();
@@ -2599,6 +2723,7 @@ function toggleMenu() {
     '<div class="sep"></div>' +
     '<button data-act="split-h">⇋ Split right<span class="kbd">'+mod+'+D</span></button>' +
     '<button data-act="split-v">⇵ Split down<span class="kbd">'+mod+'+Shift+D</span></button>' +
+    '<button data-act="export-html">⤓ Export pane as HTML</button>' +
     '<button data-act="close-pane" class="danger">✕ Close active pane</button>' +
     '<div class="sep"></div>' +
     '<button data-act="copy-url">🔗 Copy workspace URL</button>' +
@@ -2622,6 +2747,7 @@ function toggleMenu() {
       else if (act === "split-h" && activePane) splitPane(activePane, "row");
       else if (act === "split-v" && activePane) splitPane(activePane, "col");
       else if (act === "close-pane" && activePane) closePane(activePane);
+      else if (act === "export-html" && activePane) activePane.exportHtml();
       else if (act === "new-tab") {
         const tab = createTab();
         activateTab(tab.id);
@@ -2833,6 +2959,11 @@ function openAppearanceModal() {
     }).join("");
   }
   renderGrid();
+  loadAllThemes().then((n) => {
+    if (!card.isConnected) return;
+    search.placeholder = "Search " + n + " themes…";
+    renderGrid();
+  });
 
   grid.addEventListener("click", (e) => {
     const btn = e.target.closest("button.ap-theme");

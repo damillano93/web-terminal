@@ -3,10 +3,13 @@
 //
 // Vendors a curated slice of the Gogh palette catalog into public/gogh-themes.json.
 //
-// Gogh (https://github.com/Gogh-Co/Gogh) ships 366 themes as one .yml each. We
-// take ~40 rather than all of them: the whole set is mostly near-duplicates, and
-// a picker with 366 rows is worse to use than one with 40. Re-run this script to
-// refresh the palettes or to add a name to CURATED below.
+// Gogh (https://github.com/Gogh-Co/Gogh) ships ~1250 themes as one .yml each.
+// Two outputs:
+//   public/gogh-themes.json      the CURATED slice below, bundled into app.js so
+//                                the picker opens instantly with the popular ones
+//   public/gogh-themes-all.json  the whole catalog, compact, fetched by the page
+//                                only when the picker opens (or when the saved
+//                                theme is not in the curated slice)
 //
 //   npm run themes
 //
@@ -18,22 +21,26 @@ const path = require("path");
 
 const RAW = "https://raw.githubusercontent.com/Gogh-Co/Gogh/master/themes";
 const OUT = path.join(__dirname, "..", "public", "gogh-themes.json");
+const OUT_ALL = path.join(__dirname, "..", "public", "gogh-themes-all.json");
+const TREE = "https://api.github.com/repos/Gogh-Co/Gogh/git/trees/master?recursive=1";
 
 // Exact filenames (minus .yml) from the Gogh repo. Order here is the order in
 // the picker, so keep the popular ones near the top.
+// An entry may be [filename, id] when upstream renamed the file: the id is what
+// accounts have saved, so it must not change with the filename.
 const CURATED = [
   "Dracula",
   "Nord",
-  "Tokyo Night",
-  "Tokyo Night Storm",
+  ["TokyoNight", "tokyo-night"],
+  ["TokyoNight Storm", "tokyo-night-storm"],
   "Catppuccin Mocha",
   "Catppuccin Macchiato",
-  "Catppuccin Frappé",
+  "Catppuccin Frappe",
   "Gruvbox Dark",
   "Gruvbox Material Dark",
   "One Dark",
   "Solarized Dark",
-  "Github Dark",
+  "GitHub Dark",
   "Monokai Pro",
   "Monokai Soda",
   "Material",
@@ -42,12 +49,12 @@ const CURATED = [
   "Everforest Dark Medium",
   "Kanagawa Wave",
   "Kanagawa Dragon",
-  "Rosé Pine",
-  "Rosé Pine Moon",
+  "Rose Pine",
+  "Rose Pine Moon",
   "Night Owl",
   "Oceanic Next",
   "Snazzy",
-  "Cobalt 2",
+  ["Cobalt2", "cobalt-2"],
   "Horizon Dark",
   "Iceberg",
   "Synthwave",
@@ -67,7 +74,7 @@ const CURATED = [
   "Tokyo Night Light",
   "Nord Light",
   "Papercolor Light",
-  "Rosé Pine Dawn",
+  "Rose Pine Dawn",
   "Horizon Bright",
 ];
 
@@ -91,38 +98,76 @@ function slugify(name) {
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+// Fetch and normalise one theme; returns [theme, null] or [null, reason].
+async function fetchTheme(name) {
+  const res = await fetch(`${RAW}/${encodeURIComponent(name)}.yml`);
+  if (!res.ok) return [null, `HTTP ${res.status}`];
+  const y = parseGoghYaml(await res.text());
+  const ansi = [];
+  for (let i = 1; i <= 16; i++) ansi.push(y[`color_${String(i).padStart(2, "0")}`]);
+  // The page paints these straight into CSS, so only plain #rrggbb gets in.
+  if (ansi.some((c) => !HEX.test(c || "")) || !HEX.test(y.background || "") || !HEX.test(y.foreground || "")) {
+    return [null, "incomplete"];
+  }
+  return [{
+    id: slugify(name),
+    name: y.name || name,
+    author: y.author || "",
+    variant: y.variant === "light" ? "light" : "dark",
+    bg: y.background,
+    fg: y.foreground,
+    cursor: HEX.test(y.cursor || "") ? y.cursor : y.foreground,
+    ansi,
+  }, null];
+}
+
+// Run `fn` over `items` with at most `n` in flight.
+async function pool(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (next < items.length) { const i = next++; out[i] = await fn(items[i]); }
+  }));
+  return out;
+}
+
 async function main() {
   const themes = [];
   const missing = [];
 
-  for (const name of CURATED) {
-    const url = `${RAW}/${encodeURIComponent(name)}.yml`;
-    const res = await fetch(url);
-    if (!res.ok) { missing.push(`${name} (HTTP ${res.status})`); continue; }
-    const y = parseGoghYaml(await res.text());
-
-    const ansi = [];
-    for (let i = 1; i <= 16; i++) ansi.push(y[`color_${String(i).padStart(2, "0")}`]);
-    if (ansi.some((c) => !c) || !y.background || !y.foreground) {
-      missing.push(`${name} (incomplete)`);
-      continue;
-    }
-
-    themes.push({
-      id: slugify(name),
-      name: y.name || name,
-      author: y.author || "",
-      variant: y.variant === "light" ? "light" : "dark",
-      bg: y.background,
-      fg: y.foreground,
-      cursor: y.cursor || y.foreground,
-      ansi,
-    });
+  for (const entry of CURATED) {
+    const [name, legacyId] = Array.isArray(entry) ? entry : [entry, null];
+    const [t, why] = await fetchTheme(name);
+    if (!t) { missing.push(`${name} (${why})`); continue; }
+    if (legacyId) t.id = legacyId;
+    themes.push(t);
     console.log(`  ✓ ${name}`);
   }
 
   fs.writeFileSync(OUT, JSON.stringify(themes, null, 2) + "\n");
   console.log(`\n${themes.length} themes → ${path.relative(process.cwd(), OUT)}`);
+
+  // Whole catalog, sorted by name, ids unique.
+  const tree = await (await fetch(TREE, { headers: { "User-Agent": "web-terminal" } })).json();
+  const names = (tree.tree || [])
+    .map((e) => e.path)
+    .filter((p) => /^themes\/[^/]+\.yml$/.test(p))
+    .map((p) => p.slice("themes/".length, -".yml".length));
+  const results = await pool(names, 16, fetchTheme);
+  const seen = new Set();
+  const all = [];
+  results.forEach(([t], i) => {
+    if (!t) { missing.push(`${names[i]} (all)`); return; }
+    if (seen.has(t.id)) return;
+    seen.add(t.id);
+    all.push(t);
+  });
+  all.sort((a, b) => a.name.localeCompare(b.name));
+  fs.writeFileSync(OUT_ALL, JSON.stringify(all) + "\n");
+  console.log(`${all.length} themes → ${path.relative(process.cwd(), OUT_ALL)}`);
+
   if (missing.length) {
     console.warn(`\n${missing.length} not fetched:\n  ` + missing.join("\n  "));
     process.exitCode = 1;

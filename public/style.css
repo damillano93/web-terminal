@@ -449,6 +449,25 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 }
 .pane-status.error { color: var(--error); }
 
+/* OSC 9;4 progress: thin bar on top of the pane, percentage on its tab. */
+.pane-progress {
+  position: absolute; top: 0; left: 0; right: 0; height: 3px; z-index: 4;
+  background: transparent; pointer-events: none;
+}
+.pane-progress::before {
+  content: ""; display: block; height: 100%; width: var(--pct, 0%);
+  background: var(--accent); transition: width 0.2s;
+}
+.pane-progress[data-state="2"]::before { background: var(--error); }
+.pane-progress[data-state="4"]::before { background: #d29922; }
+.pane-progress[data-state="3"]::before { animation: wt-indet 1.2s ease-in-out infinite; width: 30%; }
+@keyframes wt-indet { from { margin-left: -30%; } to { margin-left: 100%; } }
+.tab-progress {
+  font-family: var(--font-mono); font-size: 0.75em; color: var(--accent);
+  margin-left: 4px; flex: 0 0 auto;
+}
+.tab-progress.error { color: var(--error); }
+
 /* Image drag & drop target. */
 .pane.drop-target { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 .pane.drop-target .pane-body::after {

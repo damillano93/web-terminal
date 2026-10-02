@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- The whole Gogh catalog (~1250 themes) in the theme picker. The curated 46
+  stay bundled; the rest (`public/gogh-themes-all.json`, ~400 KB) loads when
+  the picker opens, or at boot when the saved theme is not curated.
+  `npm run themes` refreshes both and keeps saved ids stable across upstream
+  renames.
+- Inline images in the terminal (Sixel and the iTerm2 protocol: `imgcat`,
+  `chafa`, `yazi` previews) via `@xterm/addon-image`.
+- OSC 9;4 progress: a thin bar on top of the pane and a percentage on its tab.
+- ☰ → "Export pane as HTML" downloads the pane's scrollback with colours
+  (`@xterm/addon-serialize`).
 - Images into the terminal: drag & drop onto a pane, paste with Cmd/Ctrl+V,
   or the 📎 button on the phone key bar. The image is uploaded to
   `~/.web-terminal/uploads` (`WEB_TERMINAL_UPLOAD_DIR`) and its path is typed
@@ -15,6 +25,9 @@ All notable changes to this project are documented here. The format follows
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
 ### Changed
+- xterm.js addons pinned to the releases built for xterm 5.5 (search 0.15,
+  webgl 0.18, web-links 0.11, unicode11 0.8, clipboard 0.1); 0.2.0 shipped
+  the xterm 6 builds by mistake.
 - Closing a tab or a pane with its ✕ takes two taps: the first turns it into
   a red "¿Cerrar?" for 3 s, the second closes. Stray taps no longer kill a
   shell. The menu's close actions are unchanged.
