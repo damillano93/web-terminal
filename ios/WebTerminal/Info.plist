@@ -12,8 +12,7 @@
 	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key><true/>
-	<!-- The web-terminal to open. Change it here, or long-press nothing: there is
-	     deliberately no in-app URL bar. -->
+	<!-- The web-terminal to open. There is deliberately no in-app URL bar. -->
 	<key>WTServerURL</key><string>https://terminal.example.com/</string>
 	<key>NSCameraUsageDescription</key><string>Para subir una foto a la terminal con el botón de imagen.</string>
 	<key>UILaunchScreen</key>
