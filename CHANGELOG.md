@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `ios/`: native iOS wrapper app (WKWebView) without Safari's keyboard
+  accessory bar, with a native clipboard bridge for OSC 52, plus
+  `scripts/ios-build.sh` to build, sign and install it on a device.
 - The whole Gogh catalog (~1250 themes) in the theme picker. The curated 46
   stay bundled; the rest (`public/gogh-themes-all.json`, ~400 KB) loads when
   the picker opens, or at boot when the saved theme is not curated.

@@ -211,6 +211,25 @@ Apps inside the shell can also copy to your clipboard with OSC 52 (vim's
 
 ---
 
+## iOS app (optional)
+
+`ios/` is a small native wrapper: a full-screen WKWebView on your server with no
+keyboard accessory bar (the ‹ › ✓ strip Safari adds), no browser chrome, a
+native clipboard for OSC 52, and external links opening in Safari. The server
+URL is `WTServerURL` in `ios/WebTerminal/Info.plist`.
+
+Needs Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen). One-time:
+sign an Apple ID into Xcode (Settings → Accounts) and connect the device by
+cable once with Developer Mode on. Then:
+
+```bash
+bash scripts/ios-build.sh
+```
+
+With a free Apple ID the app expires after 7 days; run the script again.
+
+---
+
 ## Development
 
 ```bash

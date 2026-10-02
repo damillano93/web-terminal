@@ -1293,8 +1293,13 @@ class Pane {
         writeText: async (_sel, text) => {
           if (!text) return;
           let ok = false;
+          // Inside the iOS app (ios/): hand it to UIPasteboard directly.
+          const native = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.wtClipboard;
+          if (native) {
+            try { native.postMessage(text); ok = true; } catch (_) {}
+          }
           try {
-            if (navigator.clipboard && window.isSecureContext) {
+            if (!ok && navigator.clipboard && window.isSecureContext) {
               await navigator.clipboard.writeText(text);
               ok = true;
             }
