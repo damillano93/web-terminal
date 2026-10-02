@@ -618,10 +618,37 @@ function installKeyBar() {
   copyBtn.setAttribute("aria-label", "Copiar texto de la terminal");
   handle.appendChild(toggle);
   handle.appendChild(document.createElement("span")).className = "spacer";
+  // Attach: a phone has no drag & drop and iOS will not paste an image into a
+  // web page reliably, so pick from Photos/Files instead.
+  const attachBtn = document.createElement("button");
+  attachBtn.type = "button";
+  attachBtn.className = "keybar-handle-btn";
+  attachBtn.textContent = "📎 imagen";
+  attachBtn.title = "Subir una imagen y escribir su ruta";
+  attachBtn.setAttribute("aria-label", "Subir una imagen");
+  const picker = document.createElement("input");
+  picker.type = "file";
+  picker.accept = "image/*";
+  picker.multiple = true;
+  picker.hidden = true;
+  handle.appendChild(toggle);
+  handle.appendChild(document.createElement("span")).className = "spacer";
   handle.appendChild(copyBtn);
+  handle.appendChild(attachBtn);
+  handle.appendChild(picker);
   handle.appendChild(document.createElement("span")).className = "spacer";
   handle.appendChild(hideKb);
   bar.appendChild(handle);
+
+  // click, not pointerdown: iOS only opens a file picker from a real click.
+  attachBtn.addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    picker.value = "";
+    picker.click();
+  });
+  picker.addEventListener("change", () => {
+    if (activePane && picker.files && picker.files.length) activePane.uploadImages(picker.files);
+  });
 
   copyBtn.addEventListener("pointerdown", (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -1135,6 +1162,7 @@ class Pane {
 
     this.el.addEventListener("mousedown", () => setActive(this), true);
     this.el.addEventListener("focusin", () => setActive(this));
+    this.installImageDrop();
 
     // Touch: a tap has to both select the pane and focus the terminal, because
     // focusing xterm's hidden textarea is the only thing that raises the
@@ -1330,6 +1358,75 @@ class Pane {
       try { this.webgl.dispose(); } catch (_) {}
       this.webgl = null;
     }
+  }
+
+  // Upload images (drop, paste, or the phone's 📎) and type their paths into
+  // the terminal. term.paste() wraps them in bracketed paste when the app asked
+  // for it, which is how Claude Code recognises a dropped image.
+  async uploadImages(files) {
+    const imgs = [...files].filter((f) => f && /^image\//.test(f.type));
+    if (!imgs.length) {
+      this.flashStatus("Solo se pueden soltar imágenes (png, jpg, gif, webp, heic)", true, 3000);
+      return;
+    }
+    const paths = [];
+    for (let i = 0; i < imgs.length; i++) {
+      const f = imgs[i];
+      this.flashStatus(`Subiendo imagen ${i + 1}/${imgs.length}…`, false, 60000);
+      try {
+        const r = await fetch("/api/upload", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": f.type, "X-WT-Upload": "1" },
+          body: f,
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.path) throw new Error(j.error || `HTTP ${r.status}`);
+        paths.push(j.path);
+      } catch (err) {
+        this.flashStatus(`No se pudo subir la imagen: ${err.message}`, true, 4000);
+        return;
+      }
+    }
+    try { this.term.paste(paths.join(" ") + " "); } catch (_) {}
+    try { this.term.focus(); } catch (_) {}
+    this.flashStatus(paths.length === 1 ? `Imagen lista · ${paths[0]}` : `${paths.length} imágenes listas`, false, 3000);
+  }
+
+  installImageDrop() {
+    // Paste: capture phase on the pane, so an image never reaches xterm's own
+    // (text-only) paste handler. Text pastes fall through untouched.
+    this.el.addEventListener("paste", (e) => {
+      const files = e.clipboardData ? [...e.clipboardData.files] : [];
+      if (!files.some((f) => /^image\//.test(f.type))) return;
+      e.preventDefault(); e.stopPropagation();
+      this.uploadImages(files);
+    }, true);
+
+    const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+    let depth = 0;
+    this.el.addEventListener("dragenter", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (depth++ === 0) this.el.classList.add("drop-target");
+    });
+    this.el.addEventListener("dragover", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    this.el.addEventListener("dragleave", (e) => {
+      if (!hasFiles(e)) return;
+      if (--depth <= 0) { depth = 0; this.el.classList.remove("drop-target"); }
+    });
+    this.el.addEventListener("drop", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      depth = 0;
+      this.el.classList.remove("drop-target");
+      setActive(this);
+      this.uploadImages(e.dataTransfer.files);
+    });
   }
 
   // Find bar over the terminal (Cmd+F on macOS, Ctrl+Shift+F elsewhere, since
@@ -2341,6 +2438,14 @@ function installShortcuts() {
       splitPane(activePane, "col");
     }
   }, true);
+}
+
+// A file dropped outside a pane would make the browser navigate to it and
+// leave the terminal. Swallow it.
+for (const ev of ["dragover", "drop"]) {
+  window.addEventListener(ev, (e) => {
+    if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault();
+  });
 }
 
 window.addEventListener("resize", () =>

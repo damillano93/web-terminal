@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Images into the terminal: drag & drop onto a pane, paste with Cmd/Ctrl+V,
+  or the 📎 button on the phone key bar. The image is uploaded to
+  `~/.web-terminal/uploads` (`WEB_TERMINAL_UPLOAD_DIR`) and its path is typed
+  into the pane, so Claude Code attaches it. PNG, JPEG, GIF, WebP and HEIC
+  (converted to JPEG on macOS), up to 25 MB; files older than 7 days are
+  deleted. The endpoint needs auth, an allowed Origin and a custom header.
+
 ## [0.2.0] — 2026-10-02
 
 ### Added

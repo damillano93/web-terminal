@@ -921,6 +921,81 @@ app.post("/api/prefs", requireAuth, prefsBodyParser, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// API: image upload (drag & drop / paste into a pane)
+// ---------------------------------------------------------------------------
+// The browser cannot hand an image to a program in the shell, and Claude
+// Code's own Ctrl+V reads the clipboard of THIS machine, not the viewer's. So
+// the page uploads the image here, we save it under UPLOAD_DIR, and the page
+// types the resulting path into the terminal, where Claude Code attaches it.
+const UPLOAD_DIR = process.env.WEB_TERMINAL_UPLOAD_DIR || path.join(os.homedir(), ".web-terminal", "uploads");
+const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const UPLOAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Content type -> extension. Only formats an image viewer or Claude reads;
+// HEIC (iPhone) is converted to JPEG with macOS `sips` when available.
+const UPLOAD_TYPES = {
+  "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp",
+  "image/heic": "heic", "image/heif": "heic",
+};
+const uploadParser = express.raw({ type: Object.keys(UPLOAD_TYPES), limit: UPLOAD_MAX_BYTES });
+
+function pruneUploads() {
+  let names = [];
+  try { names = fs.readdirSync(UPLOAD_DIR); } catch (_) { return; }
+  const cutoff = Date.now() - UPLOAD_TTL_MS;
+  for (const n of names) {
+    const f = path.join(UPLOAD_DIR, n);
+    try { if (fs.statSync(f).mtimeMs < cutoff) fs.unlinkSync(f); } catch (_) {}
+  }
+}
+pruneUploads();
+setInterval(pruneUploads, 6 * 60 * 60 * 1000).unref();
+
+function heicToJpeg(src) {
+  return new Promise((resolve) => {
+    if (process.platform !== "darwin") return resolve(null);
+    const dst = src.replace(/\.heic$/, ".jpg");
+    require("child_process").execFile("/usr/bin/sips", ["-s", "format", "jpeg", src, "--out", dst],
+      { timeout: 20000 }, (err) => {
+        if (err) return resolve(null);
+        try { fs.chmodSync(dst, 0o600); fs.unlinkSync(src); } catch (_) {}
+        resolve(dst);
+      });
+  });
+}
+
+app.post("/api/upload", requireAuth, (req, res, next) => {
+  // A plain cross-site form cannot set this header, and a fetch() that does is
+  // preflighted, so together with the Origin check this is not CSRF-able.
+  if (req.get("x-wt-upload") !== "1" || !isAllowedOrigin(req.headers.origin)) {
+    audit("upload_rejected", { ip: req.ip, origin: req.headers.origin || "" });
+    return res.status(403).json({ error: "forbidden" });
+  }
+  next();
+}, uploadParser, async (req, res) => {
+  const type = String(req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const ext = UPLOAD_TYPES[type];
+  if (!ext || !Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(415).json({ error: "unsupported image type" });
+  }
+  try {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true, mode: 0o700 });
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+    let file = path.join(UPLOAD_DIR, `img-${stamp}-${crypto.randomBytes(3).toString("hex")}.${ext}`);
+    fs.writeFileSync(file, req.body, { mode: 0o600, flag: "wx" });
+    if (ext === "heic") file = (await heicToJpeg(file)) || file;
+    audit("upload", { ip: req.ip, me: currentUser(req), file, bytes: req.body.length, type });
+    res.json({ path: file });
+  } catch (e) {
+    audit("upload_failed", { ip: req.ip, err: String(e).slice(0, 200) });
+    res.status(500).json({ error: "could not save" });
+  }
+});
+// express.raw answers an oversized body with 413 via the error handler.
+app.use("/api/upload", (err, _req, res, _next) => {
+  res.status(err.status || 500).json({ error: err.type === "entity.too.large" ? "too large (max 25 MB)" : "upload failed" });
+});
+
+// ---------------------------------------------------------------------------
 // API: workspace persistence (per-user)
 // ---------------------------------------------------------------------------
 const wsBodyParser = express.json({ limit: "256kb" });

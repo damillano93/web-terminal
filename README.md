@@ -204,6 +204,7 @@ Then set `WEB_TERMINAL_ORIGIN=https://terminal.example.com`.
 | Cmd/Ctrl+click on a URL | Open it in a new tab |
 | Cmd+C (macOS) · Ctrl+Shift+C | Copy the selection |
 | Cmd/Ctrl+Shift+Z | Zen mode |
+| Drop / paste an image | Upload it and type its path (Claude Code attaches it). On a phone: 📎 on the key bar |
 
 Apps inside the shell can also copy to your clipboard with OSC 52 (vim's
 `"+y` with OSC 52 enabled, tmux `set -g set-clipboard on`, Claude Code).

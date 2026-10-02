@@ -439,6 +439,17 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 }
 .pane-status.error { color: var(--error); }
 
+/* Image drag & drop target. */
+.pane.drop-target { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.pane.drop-target .pane-body::after {
+  content: "Suelta la imagen para subirla";
+  position: absolute; inset: 8px; z-index: 6;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: 8px;
+  background: rgba(13, 17, 23, 0.72); color: var(--fg);
+  font-size: 1.05em; pointer-events: none;
+}
+
 /* Find bar (Cmd+F / Ctrl+Shift+F), floating over the pane's top-right. */
 .pane-search {
   position: absolute; top: 8px; right: 14px; z-index: 5;
