@@ -34,8 +34,10 @@ if [ -z "${TEAM:-}" ]; then
 fi
 
 if [ -z "${DEVICE:-}" ]; then
+  # The UDID is the id followed by "(UDID)"; device names can contain spaces.
   DEVICE=$(xcrun devicectl list devices 2>/dev/null \
-    | awk '/available|connected/ && /iPhone|iPad/ {print $3; exit}')
+    | grep -E 'available|connected' | grep -E 'iPhone|iPad' \
+    | grep -oE '[0-9A-F]{8}-[0-9A-F]{16} \(UDID\)' | head -1 | cut -d' ' -f1)
 fi
 if [ -z "${DEVICE:-}" ]; then
   echo "No paired iPhone/iPad found (xcrun devicectl list devices). Connect it once by cable." >&2
