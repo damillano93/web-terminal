@@ -22,6 +22,8 @@ All notable changes to this project are documented here. The format follows
   In the last tab a fresh shell replaces it instead.
 - "Open existing session" lists each session under its tab name, with the
   program running in it (zsh, claude, vim…), and reopens it with that name.
+- The per-pane title bar (title, ⇋ ⇵ ✕) is hidden to give the terminal more
+  room. Split and close are in the ☰ menu and on Cmd/Ctrl+D, Cmd/Ctrl+Shift+D.
 
 ## [0.2.0] — 2026-10-02
 

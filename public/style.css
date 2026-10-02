@@ -419,6 +419,10 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
   padding: 0 6px;
 }
 .pane.active .pane-title { color: var(--fg); }
+/* The per-pane bar (title, split, close) is hidden to give the terminal the
+   room: split/close live in the ☰ menu and on Cmd/Ctrl+D, Cmd/Ctrl+Shift+D,
+   and `exit` closes a pane. Remove this rule to bring the bar back. */
+.pane-bar { display: none; }
 .pane-bar .spacer { flex: 1; }
 .pane-bar button {
   background: transparent; border: 0; color: var(--muted);
