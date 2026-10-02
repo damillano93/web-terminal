@@ -2041,6 +2041,11 @@ class Pane {
     if (this.disposed || !this.term) return;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       this.fitNow();
+      // WebGL panes share one glyph atlas. While this pane was out of the DOM
+      // (another tab active) the others kept drawing into it, and on return
+      // this pane read stale slots: top's "%CPU" came back as "dlVLb". Rebuild
+      // the atlas before the redraw.
+      try { this.term.clearTextureAtlas && this.term.clearTextureAtlas(); } catch (_) {}
       try { this.term.refresh && this.term.refresh(0, this.term.rows - 1); } catch (_) {}
       try { this.term.focus && this.term.focus(); } catch (_) {}
     }));

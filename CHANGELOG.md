@@ -34,6 +34,13 @@ All notable changes to this project are documented here. The format follows
   (converted to JPEG on macOS), up to 25 MB; files older than 7 days are
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
+### Fixed
+- Garbled text after switching tabs with GPU rendering (top's "%CPU" came
+  back as "dlVLb"): panes rebuild the shared WebGL glyph atlas when their tab
+  returns to the screen.
+- The white scrollbar track down the side of every pane on macOS with a mouse;
+  it is now thin and follows the theme.
+
 ### Changed
 - xterm.js addons pinned to the releases built for xterm 5.5 (search 0.15,
   webgl 0.18, web-links 0.11, unicode11 0.8, clipboard 0.1); 0.2.0 shipped

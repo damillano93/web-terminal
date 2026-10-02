@@ -722,3 +722,12 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 .keybar-key .ic { margin: 0 auto; }
 .pane-search button { display: inline-flex; align-items: center; }
 #zen-exit { align-items: center; justify-content: center; }
+
+/* Terminal scrollbar. With "always show scrollbars" (macOS with a mouse) the
+   browser default is a white 15px track down the side of every pane. Thin,
+   theme-coloured, transparent track instead. */
+.xterm .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; }
+.xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--muted); }
