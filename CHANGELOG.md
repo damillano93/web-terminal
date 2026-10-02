@@ -38,6 +38,11 @@ All notable changes to this project are documented here. The format follows
 - Garbled text after switching tabs with GPU rendering (top's "%CPU" came
   back as "dlVLb"): panes rebuild the shared WebGL glyph atlas when their tab
   returns to the screen.
+- The key bar's top row on iPad: the controls were scattered across the full
+  screen width (and a stray spacer pushed "hide keyboard" onto a hidden second
+  line). It is now a three-group toolbar as wide as the keys: show/hide keys on
+  the left, copy and image in the centre, hide keyboard on the right, with
+  26px tap targets and labels (icons only on narrow phones).
 - The white scrollbar track down the side of every pane on macOS with a mouse;
   it is now thin and follows the theme.
 

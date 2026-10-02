@@ -528,19 +528,25 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
   touch-action: manipulation;
   -webkit-touch-callout: none;
 }
-/* Handle row: collapse control on the left, dismiss-keyboard on the right.
-   Kept outside the 7-wide grid so the Termux layout stays untouched. */
-.keybar-handle { display: flex; align-items: center; gap: 4px; height: 16px; }
-.keybar-handle .spacer { flex: 1 1 auto; }
-.keybar-handle-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  background: transparent; border: 0; color: var(--muted);
-  font-size: 0.72em; line-height: 1; cursor: pointer;
-  padding: 0 14px; border-radius: 5px;
-  /* Short but wide: the row is only 16px tall, so the width carries the target. */
-  min-width: 52px; height: 16px;
+/* Handle row: show/hide keys (left), copy + image (centre), dismiss the
+   on-screen keyboard (right). Same max width as the key grid and centred with
+   it, so on an iPad the controls sit over the keys instead of at the far
+   edges of the screen. */
+.keybar-handle {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  max-width: 820px; margin: 0 auto; height: 28px;
 }
-.keybar-handle-btn:active { background: var(--bg-elev-2); color: var(--fg); }
+.keybar-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.keybar-group.start { justify-self: start; }
+.keybar-group.end { justify-self: end; }
+.keybar-handle-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  font-family: var(--font-sans); font-size: 0.74em; line-height: 1; cursor: pointer;
+  height: 26px; padding: 0 10px; border-radius: 13px; white-space: nowrap;
+}
+.keybar-group.center .keybar-handle-btn { background: var(--bg-elev-2); border-color: var(--border); color: var(--fg); }
+.keybar-handle-btn:active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* Collapsed: only the handle survives, so the bar costs ~18px instead of ~80. */
 #keybar.collapsed .keybar-keys { display: none; }
@@ -575,7 +581,13 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 
 /* Landscape on a phone is only ~430px tall; two rows at full height would eat a
    fifth of the screen. */
+@media (hover: none) and (max-width: 420px) {
+  .keybar-group.start .keybar-handle-btn span,
+  .keybar-group.end .keybar-handle-btn span { display: none; }
+}
 @media (hover: none) and (max-height: 500px) {
+  .keybar-handle { height: 24px; }
+  .keybar-handle-btn { height: 22px; }
   .keybar-key { height: 28px; font-size: 0.72em; }
   #keybar { padding: 3px 3px calc(3px + env(safe-area-inset-bottom)) 3px; }
 }

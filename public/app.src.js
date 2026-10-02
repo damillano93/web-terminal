@@ -24,6 +24,8 @@ const ICON_PATHS = {
   arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   arrowRight: '<path d="M5 12h14M12 5l7 7-7 7"/>',
   enter: '<path d="M20 4v7a4 4 0 0 1-4 4H4M9 10l-5 5 5 5"/>',
+  keyboardHide: '<rect x="2" y="2" width="20" height="13" rx="2"/><path d="M6 6h.01M10 6h.01M14 6h.01M18 6h.01M7 11h10M9 19l3 3 3-3"/>',
+  rows: '<rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="13" width="18" height="6" rx="1.5"/>',
   keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>',
   copy: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
@@ -659,7 +661,7 @@ function applyKeybarCollapsed() {
   bar.classList.toggle("collapsed", keybarCollapsed);
   const h = document.getElementById("keybar-toggle");
   if (h) {
-    h.innerHTML = keybarCollapsed ? icon("keyboard") : icon("chevronDown");
+    h.innerHTML = icon(keybarCollapsed ? "chevronUp" : "chevronDown", 14) + "<span>" + (keybarCollapsed ? "teclas" : "ocultar teclas") + "</span>";
     h.setAttribute("aria-label", keybarCollapsed ? "Show keys" : "Hide keys");
   }
   // The terminal just gained or lost ~76px.
@@ -688,7 +690,7 @@ function installKeyBar() {
   const hideKb = document.createElement("button");
   hideKb.type = "button";
   hideKb.className = "keybar-handle-btn";
-  hideKb.innerHTML = icon("chevronsDown") + icon("keyboard");
+  hideKb.innerHTML = icon("keyboardHide", 15) + "<span>teclado</span>";
   hideKb.title = "Hide the on-screen keyboard";
   hideKb.setAttribute("aria-label", "Hide the on-screen keyboard");
   // Copy: opens an overlay with the terminal text where iOS's own selection
@@ -700,8 +702,6 @@ function installKeyBar() {
   copyBtn.innerHTML = icon("copy", 14) + "<span>copiar</span>";
   copyBtn.title = "Copiar texto de la terminal";
   copyBtn.setAttribute("aria-label", "Copiar texto de la terminal");
-  handle.appendChild(toggle);
-  handle.appendChild(document.createElement("span")).className = "spacer";
   // Attach: a phone has no drag & drop and iOS will not paste an image into a
   // web page reliably, so pick from Photos/Files instead.
   const attachBtn = document.createElement("button");
@@ -715,13 +715,17 @@ function installKeyBar() {
   picker.accept = "image/*";
   picker.multiple = true;
   picker.hidden = true;
-  handle.appendChild(toggle);
-  handle.appendChild(document.createElement("span")).className = "spacer";
-  handle.appendChild(copyBtn);
-  handle.appendChild(attachBtn);
-  handle.appendChild(picker);
-  handle.appendChild(document.createElement("span")).className = "spacer";
-  handle.appendChild(hideKb);
+  // Three groups on a grid as wide as the keys below, so the row lines up with
+  // them instead of scattering across a wide iPad screen.
+  const group = (cls, ...els) => {
+    const g = document.createElement("div");
+    g.className = "keybar-group " + cls;
+    for (const e of els) g.appendChild(e);
+    return g;
+  };
+  handle.appendChild(group("start", toggle));
+  handle.appendChild(group("center", copyBtn, attachBtn, picker));
+  handle.appendChild(group("end", hideKb));
   bar.appendChild(handle);
 
   // click, not pointerdown: iOS only opens a file picker from a real click.
