@@ -7,23 +7,48 @@ import ObjectiveC
 ///  - on iPad with a hardware keyboard, the shortcuts bar at the bottom of the
 ///    screen (language, undo/redo, dictation), which iPadOS shows whenever the
 ///    focused view's inputAssistantItem has button groups.
-/// Both belong to WKWebView's private content view, so give that one instance a
-/// runtime subclass with no `inputAccessoryView`, and empty its assistant item.
-/// Only this view is affected; nothing global is swizzled.
+/// Both belong to WKWebView's private content view. That one instance gets a
+/// runtime subclass with no `inputAccessoryView` and an `inputAssistantItem`
+/// that refuses button groups — WebKit refills the groups every time an element
+/// takes focus (entering zen mode did it), so emptying them once is not enough.
+/// Nothing global is swizzled.
 final class AccessoryFreeWebView: WKWebView {
     private static let subclassName = "WTNoAccessoryContentView"
+    private static var assistantKey: UInt8 = 0
+
+    override init(frame: CGRect, configuration: WKWebViewConfiguration) {
+        super.init(frame: frame, configuration: configuration)
+        // Belt and braces: whatever the keyboard does, re-check on every show.
+        for name in [UIResponder.keyboardWillShowNotification, UIResponder.keyboardDidChangeFrameNotification,
+                     UITextInputMode.currentInputModeDidChangeNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(refresh), name: name, object: nil)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        hideInputAccessory()
+        refresh()
     }
 
-    private func hideInputAccessory() {
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        refresh()
+        return ok
+    }
+
+    @objc private func refresh() {
         guard let content = scrollView.subviews.first(where: {
             String(describing: type(of: $0)).hasPrefix("WKContent")
         }) else { return }
+        install(on: content)
+        content.inputAssistantItem.leadingBarButtonGroups = []
+        content.inputAssistantItem.trailingBarButtonGroups = []
+    }
+
+    private func install(on content: UIView) {
         let base: AnyClass = type(of: content)
-        clearAssistantBar(content)
         if NSStringFromClass(base) == Self.subclassName { return }
 
         let subclass: AnyClass
@@ -31,27 +56,39 @@ final class AccessoryFreeWebView: WKWebView {
             subclass = existing
         } else {
             guard let made = objc_allocateClassPair(base, Self.subclassName, 0) else { return }
-            let block: @convention(block) (AnyObject) -> AnyObject? = { _ in nil }
-            let imp = imp_implementationWithBlock(block)
-            let sel = #selector(getter: UIResponder.inputAccessoryView)
-            let types = method_getTypeEncoding(class_getInstanceMethod(UIView.self, sel)!)
-            class_addMethod(made, sel, imp, types)
+
+            let accessorySel = #selector(getter: UIResponder.inputAccessoryView)
+            let noAccessory: @convention(block) (AnyObject) -> AnyObject? = { _ in nil }
+            class_addMethod(made, accessorySel, imp_implementationWithBlock(noAccessory),
+                            method_getTypeEncoding(class_getInstanceMethod(UIView.self, accessorySel)!))
+
+            let assistantSel = #selector(getter: UIResponder.inputAssistantItem)
+            let emptyAssistant: @convention(block) (AnyObject) -> AnyObject = { view in
+                if let item = objc_getAssociatedObject(view, &AccessoryFreeWebView.assistantKey) as? EmptyAssistantItem {
+                    return item
+                }
+                let item = EmptyAssistantItem()
+                objc_setAssociatedObject(view, &AccessoryFreeWebView.assistantKey, item, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+                return item
+            }
+            class_addMethod(made, assistantSel, imp_implementationWithBlock(emptyAssistant),
+                            method_getTypeEncoding(class_getInstanceMethod(UIResponder.self, assistantSel)!))
+
             objc_registerClassPair(made)
             subclass = made
         }
         object_setClass(content, subclass)
     }
+}
 
-    private func clearAssistantBar(_ view: UIView) {
-        let item = view.inputAssistantItem
-        item.leadingBarButtonGroups = []
-        item.trailingBarButtonGroups = []
+/// An assistant item that stays empty: setting groups is a no-op.
+private final class EmptyAssistantItem: UITextInputAssistantItem {
+    override var leadingBarButtonGroups: [UIBarButtonItemGroup] {
+        get { [] }
+        set { }
     }
-
-    // WebKit can rebuild the groups when the field regains focus; clear them again.
-    override func becomeFirstResponder() -> Bool {
-        let ok = super.becomeFirstResponder()
-        hideInputAccessory()
-        return ok
+    override var trailingBarButtonGroups: [UIBarButtonItemGroup] {
+        get { [] }
+        set { }
     }
 }
