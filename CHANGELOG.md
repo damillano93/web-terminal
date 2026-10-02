@@ -21,6 +21,10 @@ All notable changes to this project are documented here. The format follows
   (`public/fonts`, built from `@fontsource`, SIL OFL), so they look the same on
   every device without installing anything. Only the chosen face downloads;
   panes re-measure once it has loaded.
+- New app icon: a dark terminal window with macOS traffic lights and a green
+  `>_` prompt. Square for iOS, rounded for "any", inset for "maskable", and a
+  simplified `icons/icon.svg` for the browser tab (replaces the inline
+  favicon). Service worker cache bumped so installed copies pick it up.
 - One SVG icon set (Lucide paths, ISC) replaces the Unicode/emoji glyphs in
   the menu, tab bar, key bar, search bar and zen exit.
 - Images into the terminal: drag & drop onto a pane, paste with Cmd/Ctrl+V,

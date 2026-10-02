@@ -9,7 +9,7 @@
 // Safari only registers a worker on a secure context, so this file is simply
 // never used over the plain-http Tailscale path. app.js checks for that.
 
-const CACHE = "wt-static-v2";
+const CACHE = "wt-static-v3";
 
 // Only assets the server stamps with ?v=<mtime>, plus the hashed files esbuild
 // emits into /lib/. A new build changes the URL, so a cached entry can never
