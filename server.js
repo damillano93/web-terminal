@@ -881,13 +881,41 @@ app.get("/api/me", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 // API: list active sessions (filtered to caller)
 // ---------------------------------------------------------------------------
+// Tab names live in the client's workspace layouts, not in the session, so
+// map session id -> tab name from this user's saved workspaces (the most
+// recently saved one wins when a session sits in several).
+function tabNamesBySession(owner) {
+  const out = new Map();
+  const seen = new Map();
+  const walk = (node, name, at) => {
+    if (!node || typeof node !== "object") return;
+    if (typeof node.sessionId === "string") {
+      if (!seen.has(node.sessionId) || seen.get(node.sessionId) < at) {
+        out.set(node.sessionId, name);
+        seen.set(node.sessionId, at);
+      }
+    }
+    for (const v of Object.values(node)) if (v && typeof v === "object") walk(v, name, at);
+  };
+  for (const w of workspaces.values()) {
+    if (w.owner !== owner || !Array.isArray(w.tabs)) continue;
+    for (const t of w.tabs) {
+      if (t && typeof t.name === "string") walk(t.layout, t.name.slice(0, 80), w.updatedAt || 0);
+    }
+  }
+  return out;
+}
+
 app.get("/api/sessions", requireAuth, (req, res) => {
   const me = currentUser(req);
+  const names = tabNamesBySession(me);
   const list = [];
   for (const s of sessions.values()) {
     if (s.owner !== me) continue;
     list.push({
       id: s.id,
+      tabName: names.get(s.id) || null,
+      process: s.exited ? null : s.foregroundProcess() || null,
       cols: s.cols,
       rows: s.rows,
       exited: !!s.exited,

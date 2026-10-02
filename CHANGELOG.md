@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format follows
 - Closing a tab or a pane with its ✕ takes two taps: the first turns it into
   a red "¿Cerrar?" for 3 s, the second closes. Stray taps no longer kill a
   shell. The menu's close actions are unchanged.
+- `exit` (or Ctrl+D) closes the pane, and its tab when it was the only pane.
+  In the last tab a fresh shell replaces it instead.
+- "Open existing session" lists each session under its tab name, with the
+  program running in it (zsh, claude, vim…), and reopens it with that name.
 
 ## [0.2.0] — 2026-10-02
 

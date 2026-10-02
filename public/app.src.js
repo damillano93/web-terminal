@@ -1720,6 +1720,7 @@ class Pane {
       } else if (m.t === "exit" && this.term) {
         try { this.term.write(`\r\n\x1b[33m[exited code=${m.exitCode ?? "?"}]\x1b[0m\r\n`); } catch (_) {}
         this.setStatus(`exited (code=${m.exitCode ?? "?"})`);
+        closeExitedPane(this);
       } else if (m.t === "pong") {
         // ignore
       }
@@ -2052,6 +2053,25 @@ function closePane(pane) {
     forEachPane(getLayoutRoot(), (p) => p.fitNow());
   }));
   saveWorkspace();
+}
+
+// The shell behind a pane exited (`exit`, Ctrl+D): close it like a native
+// terminal does. Its tab goes too when it was the tab's only pane — except the
+// last tab, where closePane() swaps in a fresh shell instead.
+function closeExitedPane(pane) {
+  if (pane.disposed || pane._exitClosing) return;
+  pane._exitClosing = true;
+  const tab = tabs.find((t) => { let hit = false; forEachPane(t.layoutRoot, (p) => { if (p === pane) hit = true; }); return hit; });
+  if (!tab) return;
+  if (tab.layoutRoot === pane && tabs.length > 1) {
+    closeTab(tab.id);
+  } else if (tab.id === activeTabId) {
+    closePane(pane);
+  } else {
+    // A split in a background tab: closePane() rearranges the visible layout,
+    // so leave the "[exited]" note and let it be closed by hand.
+    pane._exitClosing = false;
+  }
 }
 
 function firstLeaf(node) {
@@ -2697,9 +2717,11 @@ async function openExistingSessionModal() {
       const tag = ownIds.has(s.id) ? '<span class="sess-tag own">in this workspace</span>'
         : s.attached ? '<span class="sess-tag attached">attached elsewhere</span>'
         : '<span class="sess-tag idle">idle</span>';
+      const label = s.tabName || ("session " + s.id.slice(0, 6));
       row.innerHTML =
-        '<span class="sess-id">' + s.id.slice(0, 12) + '</span>' +
-        '<span class="sess-info">' + s.cols + '×' + s.rows +
+        '<span class="sess-id">' + escapeHtml(label) + '</span>' +
+        '<span class="sess-info">' + (s.process ? escapeHtml(s.process) + ' · ' : '') +
+          s.id.slice(0, 6) + ' · ' + s.cols + '×' + s.rows +
           ' · ' + (s.bufferBytes > 1024 ? Math.round(s.bufferBytes/1024)+'KB' : s.bufferBytes+'B') +
           ' · ' + fmtAge(ageS) + ' ago</span>' +
         tag;
@@ -2707,7 +2729,7 @@ async function openExistingSessionModal() {
         closeModal();
         // Add a new tab in this workspace pointing at the chosen session id.
         const pane = new Pane(s.id);
-        const tab = createTab({ name: "session " + s.id.slice(0, 6), layoutRoot: pane });
+        const tab = createTab({ name: s.tabName || ("session " + s.id.slice(0, 6)), layoutRoot: pane });
         activateTab(tab.id);
       });
       sessList.appendChild(row);
