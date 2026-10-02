@@ -195,6 +195,21 @@ Then set `WEB_TERMINAL_ORIGIN=https://terminal.example.com`.
 
 ---
 
+## Keyboard shortcuts
+
+| Keys | Action |
+|---|---|
+| Cmd/Ctrl+D · Cmd/Ctrl+Shift+D | Split right · split down |
+| Cmd+F (macOS) · Ctrl+Shift+F | Find in scrollback (Enter / Shift+Enter: next / previous, Esc: close) |
+| Cmd/Ctrl+click on a URL | Open it in a new tab |
+| Cmd+C (macOS) · Ctrl+Shift+C | Copy the selection |
+| Cmd/Ctrl+Shift+Z | Zen mode |
+
+Apps inside the shell can also copy to your clipboard with OSC 52 (vim's
+`"+y` with OSC 52 enabled, tmux `set -g set-clipboard on`, Claude Code).
+
+---
+
 ## Development
 
 ```bash

@@ -11,6 +11,8 @@ import GOGH_THEMES from "./gogh-themes.json";
 let RENDERER = "xterm.js";
 let TerminalCtor = null;
 let FitAddonCtor = null;
+// Optional xterm.js addons; all null under ghostty-web, which has its own.
+let XtermAddons = null;
 let CURRENT_USER = null;
 
 async function fetchCurrentUser() {
@@ -31,6 +33,20 @@ async function loadXterm() {
   TerminalCtor = xt.Terminal;
   FitAddonCtor = fit.FitAddon;
   RENDERER = "xterm.js";
+  const [search, links, unicode, clip, webgl] = await Promise.all([
+    import("@xterm/addon-search"),
+    import("@xterm/addon-web-links"),
+    import("@xterm/addon-unicode11"),
+    import("@xterm/addon-clipboard"),
+    import("@xterm/addon-webgl"),
+  ]);
+  XtermAddons = {
+    Search: search.SearchAddon,
+    WebLinks: links.WebLinksAddon,
+    Unicode11: unicode.Unicode11Addon,
+    Clipboard: clip.ClipboardAddon,
+    Webgl: webgl.WebglAddon,
+  };
 }
 
 async function setupRenderer() {
@@ -876,6 +892,7 @@ function applyBgSettings() {
     forEachPane(tab.layoutRoot, (p) => {
       if (p.term && p.term.options) {
         try { p.term.options.theme = newTheme; } catch (_) {}
+        p.syncWebgl();
         try { p.fitNow(); } catch (_) {}
       }
     });
@@ -1242,6 +1259,141 @@ class Pane {
     }, ms || 1800);
   }
 
+  loadAddons() {
+    if (!XtermAddons) return;
+    const A = XtermAddons;
+    // Emoji and CJK take two cells; the default (Unicode 6) tables get many of
+    // them wrong, which shifts everything after them on the line.
+    try {
+      this.term.loadAddon(new A.Unicode11());
+      this.term.unicode.activeVersion = "11";
+    } catch (_) {}
+    try {
+      this.term.loadAddon(new A.WebLinks((e, uri) => {
+        // Plain click would fight selection and TUIs with mouse tracking;
+        // require the platform modifier, like native terminals do.
+        if (!(IS_MAC ? e.metaKey : e.ctrlKey)) return;
+        const w = window.open(uri, "_blank", "noopener,noreferrer");
+        if (w) w.opener = null;
+      }));
+    } catch (_) {}
+    try {
+      this.search = new A.Search();
+      this.term.loadAddon(this.search);
+    } catch (_) { this.search = null; }
+    // OSC 52: lets vim/tmux/Claude Code put text on the clipboard. Write-only:
+    // a process in the shell must never be able to READ the browser clipboard.
+    try {
+      const pane = this;
+      this.term.loadAddon(new A.Clipboard(undefined, {
+        readText: () => "",
+        writeText: async (_sel, text) => {
+          if (!text) return;
+          let ok = false;
+          try {
+            if (navigator.clipboard && window.isSecureContext) {
+              await navigator.clipboard.writeText(text);
+              ok = true;
+            }
+          } catch (_) {}
+          // Insecure origin (LAN by IP) or permission refused: the keystroke
+          // that made the app copy usually still counts as user activation.
+          if (!ok) ok = copyToClipboard(text);
+          pane.flashStatus(
+            ok ? `Copiado por la app · ${text.length} caracteres` : "La app quiso copiar, pero el navegador no lo permitió",
+            !ok,
+          );
+        },
+      }));
+    } catch (_) {}
+    this.syncWebgl();
+  }
+
+  // GPU rendering is far smoother for TUIs (Claude Code, htop), but the WebGL
+  // canvas cannot show the translucent background or image, so it is only used
+  // while the background is fully opaque. Browsers also cap live WebGL
+  // contexts (~16): on context loss the pane drops back to the DOM renderer.
+  syncWebgl() {
+    if (!XtermAddons || !this.term) return;
+    const want = clamp01(bgSettings.opacity) >= 1 && !bgSettings.image;
+    if (want && !this.webgl) {
+      try {
+        const gl = new XtermAddons.Webgl();
+        gl.onContextLoss(() => {
+          try { gl.dispose(); } catch (_) {}
+          if (this.webgl === gl) this.webgl = null;
+        });
+        this.term.loadAddon(gl);
+        this.webgl = gl;
+      } catch (_) { this.webgl = null; }
+    } else if (!want && this.webgl) {
+      try { this.webgl.dispose(); } catch (_) {}
+      this.webgl = null;
+    }
+  }
+
+  // Find bar over the terminal (Cmd+F on macOS, Ctrl+Shift+F elsewhere, since
+  // Ctrl+F belongs to the shell). Enter = next, Shift+Enter = previous.
+  openSearch() {
+    if (!this.search) {
+      this.flashStatus("Búsqueda no disponible con este renderer", true);
+      return;
+    }
+    if (this.searchEl) {
+      this.searchInput.focus();
+      this.searchInput.select();
+      return;
+    }
+    const box = document.createElement("div");
+    box.className = "pane-search";
+    const input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = "Buscar…";
+    input.setAttribute("aria-label", "Buscar en el terminal");
+    input.autocapitalize = "off";
+    input.spellcheck = false;
+    const count = document.createElement("span");
+    count.className = "pane-search-count";
+    const prev = btn("↑", "Anterior (Shift+Enter)", () => run(false));
+    const next = btn("↓", "Siguiente (Enter)", () => run(true));
+    const close = btn("✕", "Cerrar (Esc)", () => this.closeSearch());
+    box.append(input, count, prev, next, close);
+    this.host.parentElement.appendChild(box);
+    this.searchEl = box;
+    this.searchInput = input;
+
+    const decorations = {
+      matchBackground: "#d2992266", activeMatchBackground: "#f0b429",
+      matchOverviewRuler: "#d29922", activeMatchColorOverviewRuler: "#f0b429",
+    };
+    const run = (forward, incremental) => {
+      const q = input.value;
+      if (!q) { this.search.clearDecorations(); count.textContent = ""; return; }
+      const opts = { caseSensitive: false, incremental: !!incremental, decorations };
+      const found = forward ? this.search.findNext(q, opts) : this.search.findPrevious(q, opts);
+      if (!found) count.textContent = "0";
+    };
+    this._searchResults = this.search.onDidChangeResults(({ resultIndex, resultCount }) => {
+      count.textContent = resultCount ? `${resultIndex + 1}/${resultCount}` : "0";
+    });
+    input.addEventListener("input", () => run(true, true));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); run(!e.shiftKey); }
+      else if (e.key === "Escape") { e.preventDefault(); this.closeSearch(); }
+    });
+    input.focus();
+  }
+
+  closeSearch() {
+    if (!this.searchEl) return;
+    try { this.search.clearDecorations(); } catch (_) {}
+    try { this._searchResults && this._searchResults.dispose(); } catch (_) {}
+    this.searchEl.remove();
+    this.searchEl = null;
+    this.searchInput = null;
+    try { this.term.focus(); } catch (_) {}
+  }
+
   start() {
     this.term = new TerminalCtor({
       fontSize: prefs.fontSize,
@@ -1264,6 +1416,7 @@ class Pane {
       this.term.loadAddon(this.fit);
     }
     this.term.open(this.host);
+    this.loadAddons();
     this.hardenInputElement();
     try { this.term.focus(); } catch (_) {}
 
@@ -2174,6 +2327,12 @@ function installShortcuts() {
     }
     if (!activePane) return;
     const k = e.key.toLowerCase();
+    const findCombo = IS_MAC ? e.metaKey && !e.shiftKey : e.ctrlKey && e.shiftKey;
+    if (k === "f" && findCombo && !e.altKey) {
+      e.preventDefault(); e.stopPropagation();
+      activePane.openSearch();
+      return;
+    }
     if (k === "d" && !e.shiftKey && !e.altKey) {
       e.preventDefault(); e.stopPropagation();
       splitPane(activePane, "row");

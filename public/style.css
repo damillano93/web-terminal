@@ -439,6 +439,32 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 }
 .pane-status.error { color: var(--error); }
 
+/* Find bar (Cmd+F / Ctrl+Shift+F), floating over the pane's top-right. */
+.pane-search {
+  position: absolute; top: 8px; right: 14px; z-index: 5;
+  display: flex; align-items: center; gap: 4px;
+  max-width: calc(100% - 28px);
+  padding: 4px 6px; border-radius: 6px;
+  background: var(--bg-elev); border: 1px solid var(--border-strong);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.pane-search input {
+  width: 180px; min-width: 0; flex: 1 1 auto;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 6px; font: inherit; font-size: 0.85em;
+}
+.pane-search input:focus { outline: none; border-color: var(--accent); }
+.pane-search-count {
+  font-family: var(--font-mono); font-size: 0.75em; color: var(--muted);
+  min-width: 3ch; text-align: right;
+}
+.pane-search button {
+  background: transparent; border: 0; color: var(--muted);
+  cursor: pointer; padding: 2px 6px; border-radius: 4px; line-height: 1;
+}
+.pane-search button:hover { background: var(--bg-elev-2); color: var(--fg); }
+
 /* ---- Phone key bar (Termux-style extra keys) ------------------------- */
 /* Hidden everywhere by default. Shown on any device driven by a finger — the
    test is the input device, not the screen size, because an iPad's on-screen

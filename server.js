@@ -139,6 +139,7 @@ const MOUSE_TRACKING_OFF = "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l\x1b[?10
 const LOG_DIR = process.env.WEB_TERMINAL_LOG_DIR || path.join(os.homedir(), "Library", "Logs");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const AUDIT_PATH = path.join(LOG_DIR, "web-terminal.log");
+const AUDIT_INPUT_TEXT = process.env.WEB_TERMINAL_AUDIT_INPUT === "1";
 const auditStream = fs.createWriteStream(AUDIT_PATH, { flags: "a" });
 function audit(event, fields) {
   const line = JSON.stringify({ ts: new Date().toISOString(), event, ...fields }) + "\n";
@@ -148,7 +149,7 @@ audit("startup", {
   pid: process.pid, port: PORT, bind: BIND, shell: SHELL,
   allowedDomain: ALLOWED_DOMAIN, redirect: GOOGLE_REDIRECT_URI,
   publicHosts: [...PUBLIC_HOSTS], localHosts: [...LOCAL_HOSTS],
-  cfAccess: CF_ACCESS_ENABLED, allowedEmails: ALLOWED_EMAILS,
+  cfAccess: CF_ACCESS_ENABLED, allowedEmails: ALLOWED_EMAILS, auditInputText: AUDIT_INPUT_TEXT,
 });
 
 // ---------------------------------------------------------------------------
@@ -302,9 +303,14 @@ class Session {
     return cleaned;
   }
 
+  // Typed lines can be passwords (sudo, ssh prompts) or tokens (export X=...),
+  // and the audit log is a plain file. By default record only that a line was
+  // entered and its length; WEB_TERMINAL_AUDIT_INPUT=1 restores full text.
   flushInputLine(ip) {
     if (this.inputLine.length > 0) {
-      audit("input", { id: this.id, owner: this.owner, ip, line: this.inputLine.slice(0, 1000) });
+      const fields = { id: this.id, owner: this.owner, ip, len: this.inputLine.length };
+      if (AUDIT_INPUT_TEXT) fields.line = this.inputLine.slice(0, 1000);
+      audit("input", fields);
       this.inputLine = "";
     }
   }
