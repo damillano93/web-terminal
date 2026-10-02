@@ -46,6 +46,11 @@ All notable changes to this project are documented here. The format follows
 - The white scrollbar track down the side of every pane on macOS with a mouse;
   it is now thin and follows the theme.
 
+### Removed
+- The touch copy overlay (key bar "copiar" button and long-press): copying
+  now goes through the terminal itself (OSC 52 from apps such as Claude Code,
+  Cmd+C / Ctrl+Shift+C on a selection).
+
 ### Changed
 - xterm.js addons pinned to the releases built for xterm 5.5 (search 0.15,
   webgl 0.18, web-links 0.11, unicode11 0.8, clipboard 0.1); 0.2.0 shipped

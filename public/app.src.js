@@ -693,15 +693,6 @@ function installKeyBar() {
   hideKb.innerHTML = icon("keyboardHide", 15) + "<span>teclado</span>";
   hideKb.title = "Hide the on-screen keyboard";
   hideKb.setAttribute("aria-label", "Hide the on-screen keyboard");
-  // Copy: opens an overlay with the terminal text where iOS's own selection
-  // works (see openCopyOverlay). A canvas cannot be selected on touch, so this
-  // button is the reliable way in; a long-press on the terminal opens it too.
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "keybar-handle-btn";
-  copyBtn.innerHTML = icon("copy", 14) + "<span>copiar</span>";
-  copyBtn.title = "Copiar texto de la terminal";
-  copyBtn.setAttribute("aria-label", "Copiar texto de la terminal");
   // Attach: a phone has no drag & drop and iOS will not paste an image into a
   // web page reliably, so pick from Photos/Files instead.
   const attachBtn = document.createElement("button");
@@ -724,7 +715,7 @@ function installKeyBar() {
     return g;
   };
   handle.appendChild(group("start", toggle));
-  handle.appendChild(group("center", copyBtn, attachBtn, picker));
+  handle.appendChild(group("center", attachBtn, picker));
   handle.appendChild(group("end", hideKb));
   bar.appendChild(handle);
 
@@ -738,10 +729,6 @@ function installKeyBar() {
     if (activePane && picker.files && picker.files.length) activePane.uploadImages(picker.files);
   });
 
-  copyBtn.addEventListener("pointerdown", (e) => {
-    e.preventDefault(); e.stopPropagation();
-    if (activePane) openCopyOverlay(activePane);
-  });
 
   toggle.addEventListener("pointerdown", (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -1046,91 +1033,6 @@ function applyBgSettings() {
 // Beware when testing this: a headless browser has its own in-process
 // clipboard, so it will happily confirm a copy that never reached the OS.
 // Verify with a real window and `pbpaste`.
-// Copy on touch, done the way the xterm.js community settled on (issue #3727):
-// a phone cannot select a <canvas>, and forcing selection over it fights iOS and
-// loses. So instead we lift the terminal's text into a readonly <textarea> in an
-// overlay, where iOS's OWN selection works — handles, magnifier, and the native
-// "Copy" menu the user already knows. Nothing to fight.
-function terminalPlainText(term) {
-  try {
-    const buf = term.buffer.active;
-    const out = [];
-    for (let i = 0; i < buf.length; i++) {
-      const line = buf.getLine(i);
-      out.push(line ? line.translateToString(true) : "");
-    }
-    while (out.length && out[out.length - 1] === "") out.pop();
-    return out.join("\n");
-  } catch (_) {
-    return "";
-  }
-}
-
-let _copyOverlayOpen = false;
-function openCopyOverlay(pane) {
-  if (_copyOverlayOpen || !pane || !pane.term) return;
-  _copyOverlayOpen = true;
-
-  const text = terminalPlainText(pane.term);
-
-  const root = document.getElementById("modal-root") || (() => {
-    const d = document.createElement("div"); d.id = "modal-root"; document.body.appendChild(d); return d;
-  })();
-  root.innerHTML = "";
-
-  const overlay = document.createElement("div");
-  overlay.className = "modal-bg copy-overlay";
-
-  const card = document.createElement("div");
-  card.className = "modal-card copy-card";
-
-  const head = document.createElement("div");
-  head.className = "copy-head";
-  head.innerHTML = '<span>Mantén el dedo sobre el texto para seleccionar, luego toca Copiar</span>';
-
-  const ta = document.createElement("textarea");
-  ta.className = "copy-ta";
-  ta.readOnly = true;
-  // These win over anything inherited: the textarea MUST stay selectable.
-  ta.setAttribute("autocomplete", "off");
-  ta.setAttribute("autocorrect", "off");
-  ta.setAttribute("autocapitalize", "off");
-  ta.setAttribute("spellcheck", "false");
-  ta.value = text;
-
-  const actions = document.createElement("div");
-  actions.className = "modal-actions";
-  actions.innerHTML =
-    '<button class="modal-btn ghost" data-act="all">Copiar todo</button>' +
-    '<button class="modal-btn" data-act="close">Cerrar</button>';
-
-  card.appendChild(head);
-  card.appendChild(ta);
-  card.appendChild(actions);
-  overlay.appendChild(card);
-  root.appendChild(overlay);
-
-  // Show the most recent output first.
-  ta.scrollTop = ta.scrollHeight;
-
-  const close = () => {
-    root.innerHTML = "";
-    document.removeEventListener("keydown", onEsc, true);
-    _copyOverlayOpen = false;
-    // Hand focus back to the terminal so typing continues.
-    try { pane.term && pane.term.focus(); } catch (_) {}
-  };
-  function onEsc(ev) { if (ev.key === "Escape") close(); }
-
-  actions.querySelector('[data-act="close"]').addEventListener("click", close);
-  actions.querySelector('[data-act="all"]').addEventListener("click", () => {
-    const ok = copyToClipboard(ta.value);
-    if (ok) { close(); }
-  });
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  document.addEventListener("keydown", onEsc, true);
-}
-
 function copyToClipboard(text) {
   if (!text) return false;
 
@@ -1296,33 +1198,6 @@ class Pane {
     }, { passive: true });
 
     this.installTouchScroll();
-    this.installCopyLongPress();
-  }
-
-  // A long-press (finger held ~500ms without moving) opens the copy overlay too,
-  // for people who reach for the iOS gesture. It is only a shortcut — the keybar
-  // "copiar" button is the guaranteed path, since iOS can cancel a touch
-  // sequence at will. Just detects the hold; no dragging over the canvas.
-  installCopyLongPress() {
-    let timer = null;
-    let from = null;
-    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
-    this.host.addEventListener("touchstart", (e) => {
-      const t = e.touches && e.touches[0];
-      from = t ? { x: t.clientX, y: t.clientY } : null;
-      cancel();
-      if (!from) return;
-      timer = setTimeout(() => {
-        timer = null;
-        openCopyOverlay(this);
-      }, 500);
-    }, { passive: true });
-    this.host.addEventListener("touchmove", (e) => {
-      const t = e.touches && e.touches[0];
-      if (from && t && Math.abs(t.clientX - from.x) + Math.abs(t.clientY - from.y) > 12) cancel();
-    }, { passive: true });
-    this.host.addEventListener("touchend", cancel, { passive: true });
-    this.host.addEventListener("touchcancel", cancel, { passive: true });
   }
 
   setStatus(text, isError) {
