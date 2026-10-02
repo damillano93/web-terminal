@@ -37,12 +37,36 @@ const MIGRATION_OWNER = (process.env.WEB_TERMINAL_MIGRATION_OWNER || LOCAL_USER)
 
 const OAUTH_ENABLED = !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REDIRECT_URI);
 const PASSWORD_ENABLED = !!PASSWORD;
+// Cloudflare Access in front of the tunnel. When both are set, the edge does
+// the login (its own policy decides who), and every request that reaches us
+// through Cloudflare must carry the Access JWT (Cf-Access-Jwt-Assertion) for
+// THIS application — signed by the team's keys, unexpired, right audience —
+// or it is refused outright. The email inside the JWT is the user, still
+// subject to the same ALLOWED_EMAILS / ALLOWED_DOMAIN filter as OAuth.
+// TEAM is the Zero Trust team name (<team>.cloudflareaccess.com); AUD is the
+// application's Audience tag from the Access dashboard.
+const CF_ACCESS_TEAM = (process.env.WEB_TERMINAL_CF_ACCESS_TEAM || "").toLowerCase().trim();
+const CF_ACCESS_AUD = (process.env.WEB_TERMINAL_CF_ACCESS_AUD || "").trim();
+const CF_ACCESS_ENABLED = !!(CF_ACCESS_TEAM && CF_ACCESS_AUD);
+const CF_ACCESS_ISSUER = `https://${CF_ACCESS_TEAM}.cloudflareaccess.com`;
+// Overridable only so the test suite can point it at a local JWKS.
+const CF_ACCESS_CERTS_URL = process.env.WEB_TERMINAL_CF_ACCESS_CERTS_URL || `${CF_ACCESS_ISSUER}/cdn-cgi/access/certs`;
 
-if (!OAUTH_ENABLED && !PASSWORD_ENABLED && process.env.WEB_TERMINAL_LOCAL_BYPASS !== "1") {
+// Who may log in, regardless of which door they used (OAuth, Access).
+function isEmailAllowed(email) {
+  const domain = email.split("@")[1] || "";
+  const domainOk = ALLOWED_DOMAIN ? domain === ALLOWED_DOMAIN : false;
+  const emailOk = ALLOWED_EMAILS.length ? ALLOWED_EMAILS.includes(email) : false;
+  const noRestriction = !ALLOWED_DOMAIN && !ALLOWED_EMAILS.length;
+  return domainOk || emailOk || noRestriction;
+}
+
+if (!OAUTH_ENABLED && !PASSWORD_ENABLED && !CF_ACCESS_ENABLED && process.env.WEB_TERMINAL_LOCAL_BYPASS !== "1") {
   console.error(
     "FATAL: no auth method configured. Set one of:\n" +
     "  - WEB_TERMINAL_PASSWORD=<a strong password>\n" +
     "  - the Google OAuth trio (WEB_TERMINAL_GOOGLE_CLIENT_ID, _SECRET, _REDIRECT)\n" +
+    "  - Cloudflare Access (WEB_TERMINAL_CF_ACCESS_TEAM + WEB_TERMINAL_CF_ACCESS_AUD)\n" +
     "  - WEB_TERMINAL_LOCAL_BYPASS=1  (local/private networks only)",
   );
   process.exit(1);
@@ -53,6 +77,7 @@ const SHELL = process.env.WEB_TERMINAL_SHELL || process.env.SHELL || "/bin/bash"
 const PUBLIC_DIR = path.join(__dirname, "public");
 const COOKIE_NAME = "wt_auth";
 const OAUTH_STATE_COOKIE = "wt_oauth_state";
+const OAUTH_RETRY_COOKIE = "wt_oauth_retry";
 const COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // Sessions live as long as the server runs (code-server style). They are only
 // destroyed by: explicit client kill ({t:"kill"}), server restart, or 60s
@@ -69,21 +94,46 @@ for (const o of (process.env.WEB_TERMINAL_ORIGIN || "").split(",").map((x) => x.
 }
 if (GOOGLE_REDIRECT_URI) { try { PUBLIC_HOSTS.add(new URL(GOOGLE_REDIRECT_URI).hostname); } catch (_) {} }
 
+// The box's own names. Over the LAN/Tailscale the browser reaches us by
+// hostname (mac.local, MagicDNS) rather than by IP, and those are just as
+// same-origin as the IP is. Resolved once at startup: the OS hostname, its
+// short form and the mDNS ".local" form. Deliberately NOT "whatever the Host
+// header says": that would reopen the DNS-rebinding hole the allowlist exists
+// to close.
+const LOCAL_HOSTS = new Set();
+(function collectLocalHosts() {
+  const add = (h) => { h = String(h || "").toLowerCase().replace(/\.$/, ""); if (h) LOCAL_HOSTS.add(h); };
+  const osName = os.hostname();
+  add(osName);
+  const short = osName.split(".")[0];
+  add(short);
+  add(`${short}.local`);
+})();
+
 function isAllowedOrigin(origin) {
   if (!origin) return true;                 // curl/native ws — not a browser CSRF vector
   let host;
-  try { host = new URL(origin).hostname; } catch (_) { return false; }
+  try { host = new URL(origin).hostname.toLowerCase().replace(/\.$/, ""); } catch (_) { return false; }
   if (PUBLIC_HOSTS.has(host)) return true;
+  if (LOCAL_HOSTS.has(host)) return true;
   if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
-  // RFC1918 + Tailscale ranges, same set the local bypass trusts.
+  // RFC1918 only, the same set the local bypass trusts. The Tailscale range is
+  // deliberately absent: that tailnet is a corporate VPN, not this user's.
   if (/^10\./.test(host)) return true;
   if (/^192\.168\./.test(host)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
-  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return true;
-  if (/^\[?fd7a:115c:a1e0:/i.test(host)) return true;
   return false;
 }
 const REPLAY_BYTES = 256 * 1024;               // ~256 KB of recent output for replay
+// Mouse-report filtering when the bare shell is in the foreground (see
+// Session.filterInput). SGR mouse reports (ESC[<b;x;yM / m) and focus
+// in/out (ESC[I / ESC[O) are the only sequences a browser terminal emits
+// unprompted by the user.
+const SHELL_NAME = path.basename(SHELL);
+const FG_CACHE_MS = 300;
+const MOUSE_REPORT_HINT = /\x1b\[(?:<|[IO])/;
+const MOUSE_REPORT_RE = /\x1b\[<\d+;\d+;\d+[mM]|\x1b\[[IO]/g;
+const MOUSE_TRACKING_OFF = "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l\x1b[?1004l";
 
 // Audit log -----------------------------------------------------------------
 const LOG_DIR = process.env.WEB_TERMINAL_LOG_DIR || path.join(os.homedir(), "Library", "Logs");
@@ -97,6 +147,8 @@ function audit(event, fields) {
 audit("startup", {
   pid: process.pid, port: PORT, bind: BIND, shell: SHELL,
   allowedDomain: ALLOWED_DOMAIN, redirect: GOOGLE_REDIRECT_URI,
+  publicHosts: [...PUBLIC_HOSTS], localHosts: [...LOCAL_HOSTS],
+  cfAccess: CF_ACCESS_ENABLED, allowedEmails: ALLOWED_EMAILS,
 });
 
 // ---------------------------------------------------------------------------
@@ -207,6 +259,47 @@ class Session {
     if (!this.exited) {
       try { this.term.write(d); } catch (_) {}
     }
+  }
+
+  // Name of the process currently owning the terminal (tcgetpgrp under the
+  // hood, via node-pty). Cached briefly: mouse-motion reports arrive dozens of
+  // times a second while the pointer moves.
+  foregroundProcess() {
+    const now = Date.now();
+    if (this._fgAt && now - this._fgAt < FG_CACHE_MS) return this._fg;
+    let name = "";
+    try { name = String(this.term.process || ""); } catch (_) {}
+    this._fg = name;
+    this._fgAt = now;
+    return name;
+  }
+
+  // Mouse and focus reports are only meaningful to the application that asked
+  // for them. Claude Code turns on any-motion tracking (DECSET 1003); if it is
+  // killed instead of exiting cleanly, nothing sends the matching reset, so the
+  // browser keeps reporting every hover and zsh echoes it as "<35;12;40M".
+  // When the login shell itself is in the foreground there is no consumer, so
+  // drop the reports and tell the terminal to stop tracking. The disable
+  // sequence goes into the replay buffer too, so a reconnect sees the same
+  // state.
+  filterInput(d) {
+    if (!MOUSE_REPORT_HINT.test(d)) return d;
+    const fg = this.foregroundProcess();
+    if (fg !== SHELL_NAME) {
+      this._healedShell = false;
+      return d;
+    }
+    const cleaned = d.replace(MOUSE_REPORT_RE, "");
+    if (cleaned !== d && !this._healedShell) {
+      this._healedShell = true;
+      const off = MOUSE_TRACKING_OFF;
+      this.appendBuffer(off);
+      if (this.ws && this.ws.readyState === 1) {
+        try { this.ws.send(JSON.stringify({ t: "d", d: off })); } catch (_) {}
+      }
+      audit("mouse_reports_dropped", { id: this.id, owner: this.owner, fg });
+    }
+    return cleaned;
   }
 
   flushInputLine(ip) {
@@ -393,6 +486,83 @@ app.use((req, res, next) => {
 });
 app.use(cookieParser(SECRET));
 app.use(express.urlencoded({ extended: false, limit: "8kb" }));
+
+// Cloudflare Access -----------------------------------------------------------
+// Verify the JWT Access attaches to every request it lets through. RS256 with
+// the team's published keys, cached for six hours and refreshed on an unknown
+// kid (Cloudflare rotates them). Plain node crypto, no extra dependency.
+let cfAccessKeyCache = { fetchedAt: 0, keys: new Map() };
+async function cfAccessKeys(force) {
+  const now = Date.now();
+  if (!force && cfAccessKeyCache.keys.size && now - cfAccessKeyCache.fetchedAt < 6 * 3600 * 1000) {
+    return cfAccessKeyCache.keys;
+  }
+  const r = await fetch(CF_ACCESS_CERTS_URL);
+  if (!r.ok) throw new Error(`access certs: HTTP ${r.status}`);
+  const j = await r.json();
+  const keys = new Map();
+  for (const k of (j && j.keys) || []) {
+    if (!k || !k.kid) continue;
+    try { keys.set(k.kid, crypto.createPublicKey({ key: k, format: "jwk" })); } catch (_) {}
+  }
+  cfAccessKeyCache = { fetchedAt: now, keys };
+  return keys;
+}
+function b64urlJson(s) { return JSON.parse(Buffer.from(s, "base64url").toString("utf8")); }
+// Returns the email on a valid token, otherwise a string reason (never throws
+// on a malformed token — only on a certs fetch failure).
+async function verifyCfAccessJwt(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) return "malformed";
+  let header, payload;
+  try { header = b64urlJson(parts[0]); payload = b64urlJson(parts[1]); } catch (_) { return "malformed"; }
+  if (!header || header.alg !== "RS256" || typeof header.kid !== "string") return "bad_alg";
+  let keys = await cfAccessKeys(false);
+  let key = keys.get(header.kid);
+  if (!key) { keys = await cfAccessKeys(true); key = keys.get(header.kid); }
+  if (!key) return "unknown_kid";
+  const ok = crypto.verify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], "base64url"));
+  if (!ok) return "bad_signature";
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== "number" || payload.exp < now - 30) return "expired";
+  if (typeof payload.nbf === "number" && payload.nbf > now + 30) return "not_yet_valid";
+  if (payload.iss !== CF_ACCESS_ISSUER) return "bad_issuer";
+  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (!aud.includes(CF_ACCESS_AUD)) return "bad_audience";
+  const email = String(payload.email || "").toLowerCase();
+  if (!email || !email.includes("@")) return "no_email";
+  return { email };
+}
+function cameThroughCloudflare(req) {
+  return !!(req.headers["cf-ray"] || req.headers["cf-connecting-ip"] || req.headers["cf-access-jwt-assertion"]);
+}
+app.use(async (req, res, next) => {
+  if (!CF_ACCESS_ENABLED) return next();
+  const token = req.headers["cf-access-jwt-assertion"] || (req.cookies && req.cookies.CF_Authorization) || "";
+  if (token) {
+    try {
+      const v = await verifyCfAccessJwt(token);
+      if (typeof v === "string") {
+        audit("cf_access_rejected", { ip: req.ip, reason: v });
+      } else if (!isEmailAllowed(v.email)) {
+        audit("cf_access_denied", { ip: req.ip, email: v.email });
+      } else {
+        req.cfAccessUser = v.email;
+      }
+    } catch (e) {
+      audit("cf_access_error", { ip: req.ip, err: String(e).slice(0, 200) });
+      return res.status(503).type("text").send("Cloudflare Access verification unavailable");
+    }
+  }
+  // Traffic from Cloudflare that did not pass Access means the Access policy
+  // is off or bypassed. Refuse rather than fall through to the app's own
+  // login — with Access on, the edge is the only door for internet traffic.
+  if (cameThroughCloudflare(req) && !req.cfAccessUser) {
+    audit("cf_access_missing", { ip: req.ip, path: req.path, hadToken: !!token });
+    return res.status(403).type("text").send("Cloudflare Access required");
+  }
+  next();
+});
 // The worker must be revalidated on every load, or a broken one sticks around
 // with no way for the user to evict it. It also has to be served from the root
 // so its scope covers the whole app.
@@ -417,10 +587,12 @@ function isHttps(req) {
 // Local access without the Google round-trip.
 //
 // Reaching this box through Cloudflare costs ~570ms per request because the
-// nearest edge is Miami, which makes typing painful. On the LAN or over
-// Tailscale the same request is ~5ms, but the OAuth redirect_uri is pinned to
-// the public hostname, so a login started from an IP address can never
-// complete. Hence: trust the network path instead, for private ranges only.
+// nearest edge is Miami, which makes typing painful. On the LAN the same
+// request is ~5ms, but the OAuth redirect_uri is pinned to the public
+// hostname, so a login started from an IP address can never complete. Hence:
+// trust the network path instead, for private ranges only. NOT the Tailscale
+// range: the tailnet this box sits on is a corporate VPN with other people on
+// it, and trusting it would hand every one of them a shell.
 //
 // SECURITY: cloudflared delivers internet traffic to 127.0.0.1 as well, so a
 // naive "is the socket local?" check would hand the shell to the whole world.
@@ -432,8 +604,6 @@ const TRUSTED_PEER = [
   /^(::ffff:)?10\./,                               // RFC1918
   /^(::ffff:)?192\.168\./,
   /^(::ffff:)?172\.(1[6-9]|2\d|3[01])\./,
-  /^(::ffff:)?100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // Tailscale 100.64/10
-  /^fd7a:115c:a1e0:/i,                             // Tailscale IPv6
 ];
 const LOCAL_BYPASS = process.env.WEB_TERMINAL_LOCAL_BYPASS === "1";
 const LOCAL_OWNER = MIGRATION_OWNER;
@@ -450,6 +620,9 @@ function isTrustedLocal(req) {
 }
 
 function currentUser(req) {
+  // Edge-verified identity wins: it was checked against Cloudflare's keys on
+  // this very request.
+  if (req.cfAccessUser) return req.cfAccessUser;
   // The cookie is SIGNED, so a present, well-formed value was issued by us —
   // an OAuth email or the password/bypass user name. (The old check required an
   // "@", which silently rejected password logins.)
@@ -527,9 +700,23 @@ app.get("/auth/google/callback", async (req, res) => {
   const expected = req.signedCookies[OAUTH_STATE_COOKIE];
   res.clearCookie(OAUTH_STATE_COOKIE, { path: "/auth/google/callback" });
   if (!state || !expected || state !== expected) {
-    audit("oauth_bad_state", { ip: req.ip });
-    return loginErrorPage(res, 400, "state");
+    const retried = req.signedCookies[OAUTH_RETRY_COOKIE] === "1";
+    audit("oauth_bad_state", {
+      ip: req.ip,
+      reason: !state ? "no_state_param" : !expected ? "no_state_cookie" : "mismatch",
+      retried, ua: String(req.headers["user-agent"] || "").slice(0, 160),
+    });
+    res.clearCookie(OAUTH_RETRY_COOKIE, { path: "/auth/google/callback" });
+    if (retried) return loginErrorPage(res, 400, "state");
+    // One automatic restart: fresh state cookie, straight back to Google
+    // (already signed in there, so it is a quick bounce).
+    res.cookie(OAUTH_RETRY_COOKIE, "1", {
+      signed: true, httpOnly: true, sameSite: "lax", secure: isHttps(req),
+      maxAge: 10 * 60 * 1000, path: "/auth/google/callback",
+    });
+    return res.set("Cache-Control", "no-store").redirect("/auth/google/start");
   }
+  res.clearCookie(OAUTH_RETRY_COOKIE, { path: "/auth/google/callback" });
   if (typeof req.query.error === "string") {
     audit("oauth_provider_error", { ip: req.ip, error: req.query.error });
     return loginErrorPage(res, 401, "provider");
@@ -583,14 +770,10 @@ app.get("/auth/google/callback", async (req, res) => {
       audit("oauth_email_unverified", { email });
       return loginErrorPage(res, 401, "unverified");
     }
-    const domain = email.split("@")[1] || "";
     // Allow if it matches the domain OR is on the email allowlist. If neither is
     // configured, any verified Google account passes (see the README warning).
-    const domainOk = ALLOWED_DOMAIN ? domain === ALLOWED_DOMAIN : false;
-    const emailOk = ALLOWED_EMAILS.length ? ALLOWED_EMAILS.includes(email) : false;
-    const noRestriction = !ALLOWED_DOMAIN && !ALLOWED_EMAILS.length;
-    if (!domainOk && !emailOk && !noRestriction) {
-      audit("oauth_denied", { email, domain });
+    if (!isEmailAllowed(email)) {
+      audit("oauth_denied", { email, domain: email.split("@")[1] || "" });
       return loginErrorPage(res, 403, "domain");
     }
     setAuthCookie(req, res, email);
@@ -639,6 +822,7 @@ app.post("/logout", requireAuth, (req, res) => {
   const email = currentUser(req);
   res.clearCookie(COOKIE_NAME, { path: "/" });
   audit("logout", { ip: req.ip, email });
+  if (CF_ACCESS_ENABLED && cameThroughCloudflare(req)) return res.redirect("/cdn-cgi/access/logout");
   res.redirect("/login");
 });
 
@@ -790,8 +974,8 @@ app.ws("/ws/term", (ws, req) => {
   // Origin header; a non-browser client (no Origin) is allowed through, since it
   // cannot be a cross-site browser attack.
   if (!isAllowedOrigin(req.headers.origin)) {
-    audit("ws_bad_origin", { ip: req.ip, me, origin: req.headers.origin || "" });
-    try { ws.close(1008, "bad origin"); } catch (_) {}
+    audit("ws_bad_origin", { ip: req.ip, me, origin: req.headers.origin || "", host: req.headers.host || "" });
+    try { ws.close(4003, "bad origin"); } catch (_) {}
     return;
   }
 
@@ -856,6 +1040,8 @@ app.ws("/ws/term", (ws, req) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.t === "i" && typeof msg.d === "string") {
+      msg.d = session.filterInput(msg.d);
+      if (!msg.d) return;
       for (const ch of msg.d) {
         if (ch === "\r" || ch === "\n" || ch === "") session.flushInputLine(ip);
         else {

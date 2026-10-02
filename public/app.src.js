@@ -1217,6 +1217,18 @@ class Pane {
     this.flashStatus(`Esta app usa el ratón · mantén ${key} y arrastra para seleccionar`, false, 4000);
   }
 
+  // Put xterm.js back into "plain shell" mode without touching the scrollback:
+  // leave the alternate screen, stop mouse / focus / bracketed-paste reporting,
+  // show the cursor and clear any lingering text attributes. Written locally,
+  // never sent to the PTY.
+  resetTerminalModes() {
+    if (!this.term) return;
+    try {
+      this.term.write("\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m");
+    } catch (_) {}
+    this.mouseGrab = false;
+  }
+
   // Show a message for a moment, then put the usual status line back.
   flashStatus(text, isError, ms) {
     const base = this._baseStatus != null ? this._baseStatus : this.statusEl.textContent;
@@ -1414,6 +1426,11 @@ class Pane {
         this.setStatus("session expired — reload to log in", true);
         return;
       }
+      if (e.code === 4003) {
+        this.setStatus(`blocked: the server does not recognise ${location.host} as its own address — open it by IP or by its public hostname`, true);
+        try { this.term && this.term.write(`\r\n\x1b[31m[origin ${location.origin} rejected by the server]\x1b[0m\r\n`); } catch (_) {}
+        return;
+      }
       if (e.code === 4002) {
         this.setStatus("session terminated", true);
         return;
@@ -1434,6 +1451,13 @@ class Pane {
         this.sessionId = m.id;
         this.titleEl.textContent = `term ${this.id} · ${this.lastCols}×${this.lastRows} · ${m.id.slice(0, 6)}`;
         if (wasRestoring && m.fresh) {
+          // The PTY behind this pane is gone (server restart, session expiry)
+          // but xterm.js still carries whatever modes the last app switched
+          // on. Claude Code enables any-motion mouse tracking (DECSET 1003), so
+          // without this the fresh zsh gets an ESC[<35;x;yM report for every
+          // hover and echoes it as "<35;12;40M" garbage. Nothing in the new
+          // shell will ever turn those modes off — it never turned them on.
+          this.resetTerminalModes();
           try { this.term.write(`\r\n\x1b[33m[previous session expired — fresh shell]\x1b[0m\r\n`); } catch (_) {}
         }
         saveWorkspace();

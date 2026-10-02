@@ -106,6 +106,31 @@ export WEB_TERMINAL_ALLOWED_DOMAIN='example.com'
 export WEB_TERMINAL_ALLOWED_EMAILS='you@example.com,mate@example.com'
 ```
 
+### Auth D — Cloudflare Access (recommended for internet access)
+
+Put the app behind a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+and let **Cloudflare Access** do the login at the edge, so unauthenticated
+traffic never reaches the box:
+
+1. Zero Trust → *Access* → *Applications* → *Add an application* → *Self-hosted*.
+   Application domain: your public hostname. Session duration: e.g. 24h.
+2. Add a policy: **Allow**, *Include* → *Emails* → your address only.
+   Login method: One-time PIN (default) and/or Google.
+3. Copy the **Application Audience (AUD) Tag** from the application's overview
+   and your team name (`<team>.cloudflareaccess.com`), then:
+
+```bash
+export WEB_TERMINAL_CF_ACCESS_TEAM='<team>'
+export WEB_TERMINAL_CF_ACCESS_AUD='<aud tag>'
+export WEB_TERMINAL_ALLOWED_EMAILS='you@example.com'   # still enforced app-side
+```
+
+The server verifies the `Cf-Access-Jwt-Assertion` JWT on every request
+(signature against the team's keys, expiry, issuer, audience). Any request that
+arrives through Cloudflare *without* a valid assertion is refused with 403, so
+enable the Access application before setting these variables. Google OAuth
+(Auth B) becomes unnecessary and can be removed.
+
 ### Auth C — local-network bypass
 
 ```bash
@@ -113,11 +138,10 @@ export WEB_TERMINAL_LOCAL_BYPASS=1
 ```
 
 Skips login for requests arriving **directly** (not through a proxy) from
-loopback, RFC1918, or Tailscale ranges — handy for LAN/Tailscale access without
-the OAuth round-trip. It rejects anything carrying proxy headers, so
+loopback or RFC1918 ranges — handy for LAN access without the OAuth round-trip. It rejects anything carrying proxy headers, so
 internet traffic through a reverse proxy still has to log in. Note it trusts the
-**whole** private range, not just your own devices; on a shared corporate
-Tailnet, prefer restricting reachability with Tailscale ACLs.
+**whole** private range, not just your own devices. VPN/overlay ranges such as
+Tailscale's 100.64/10 are deliberately not trusted.
 
 ---
 
