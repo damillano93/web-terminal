@@ -3324,8 +3324,13 @@ async function openExistingSessionModal() {
     sessList.innerHTML = '<div class="empty">No sessions on the server.</div>';
   } else {
     for (const s of list) {
-      const row = document.createElement("button");
+      // A div with a button role: it holds its own ✕ button, and a button
+      // inside a button is not valid HTML.
+      const row = document.createElement("div");
       row.className = "sess-row";
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === row) row.click(); });
       const ageS = Math.max(0, Math.round((Date.now() - s.lastDataAt) / 1000));
       const tag = ownIds.has(s.id) ? '<span class="sess-tag own">in this workspace</span>'
         : s.attached ? '<span class="sess-tag attached">attached elsewhere</span>'
@@ -3335,9 +3340,37 @@ async function openExistingSessionModal() {
         '<span class="sess-id">' + escapeHtml(label) + '</span>' +
         '<span class="sess-info">' + (s.process ? escapeHtml(s.process) + ' · ' : '') +
           s.id.slice(0, 6) + ' · ' + s.cols + '×' + s.rows +
-          ' · ' + (s.bufferBytes > 1024 ? Math.round(s.bufferBytes/1024)+'KB' : s.bufferBytes+'B') +
           ' · ' + fmtAge(ageS) + ' ago</span>' +
         tag;
+      // ✕: end the shell for good (two taps, like closing a tab). A session
+      // open in this workspace is closed through its pane, so the tab goes too.
+      const kill = document.createElement("button");
+      kill.type = "button";
+      kill.className = "sess-kill";
+      kill.title = "Cerrar esta sesión (dos toques)";
+      kill.setAttribute("aria-label", "Cerrar sesión");
+      kill.innerHTML = icon("x", 14);
+      kill.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirmCloseTap(kill)) return;
+        let pane = null;
+        for (const t of tabs) forEachPane(t.layoutRoot, (p) => { if (p.sessionId === s.id) pane = p; });
+        if (pane) {
+          closeExitedPane(pane);
+        } else {
+          try {
+            const r = await fetch("/api/sessions/" + encodeURIComponent(s.id), {
+              method: "DELETE", credentials: "include", headers: { "X-WT-Action": "1" },
+            });
+            if (!r.ok && r.status !== 404) throw new Error("HTTP " + r.status);
+          } catch (err) {
+            kill.title = "No se pudo cerrar: " + err.message;
+            return;
+          }
+        }
+        row.remove();
+      });
+      row.appendChild(kill);
       row.addEventListener("click", () => {
         closeModal();
         // Add a new tab in this workspace pointing at the chosen session id.

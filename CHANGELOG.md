@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format follows
   output dots, Cmd+↑/↓ prompt jumps, and notifications for long commands and
   OSC 9 / 777 messages (system notification in the iOS app or the browser,
   toast in the page).
+- "Open existing session": a ✕ on each row ends that shell (two taps);
+  `DELETE /api/sessions/:id`, owner-only, Origin + X-WT-Action header.
 - Command palette (Cmd+P / Ctrl+Shift+P / key bar): tabs, actions and saved
   commands, stored per account.
 - `ios/`: native iOS wrapper app (WKWebView) without Safari's keyboard

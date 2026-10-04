@@ -1045,6 +1045,20 @@ app.get("/api/sessions", requireAuth, async (req, res) => {
   res.json({ sessions: list });
 });
 
+// End one of your own sessions (the ✕ in "Open existing session"). Same
+// cross-site guard as uploads: an allowed Origin plus a header a plain form
+// cannot send.
+app.delete("/api/sessions/:id", requireAuth, (req, res) => {
+  if (req.get("x-wt-action") !== "1" || !isAllowedOrigin(req.headers.origin)) {
+    audit("session_kill_rejected", { ip: req.ip, origin: req.headers.origin || "" });
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const s = sessions.get(String(req.params.id).slice(0, 64));
+  if (!s || s.owner !== currentUser(req)) return res.status(404).json({ error: "not found" });
+  s.destroy("api-kill");
+  res.status(204).end();
+});
+
 // ---------------------------------------------------------------------------
 // API: appearance preferences (per-account)
 // ---------------------------------------------------------------------------
