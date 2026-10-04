@@ -31,6 +31,12 @@ All notable changes to this project are documented here. The format follows
   expires, home-screen quick actions (new tab + first tabs by name), image
   paste with Cmd+V, a haptic bell, and a right-click / long-press menu
   (copy, paste, paste image, find, clear).
+- Apps switch to the LAN at home: after fetching a key over the public,
+  Access-authenticated URL (`/api/lan-key`), they check the LAN address by
+  having it sign a random nonce (`/api/lan-proof`, HMAC) and only then go
+  direct; elsewhere, or if the proof fails, they stay on the public URL.
+  Re-checked on return to the app and on network changes; the page reloads
+  on the same workspace. Settings: "Conexión directa en casa", local address.
 - Mac app: the iOS project also builds for Mac Catalyst as "Web Terminal",
   with a Terminal menu (⌘T/⌘W/⌘1…9/⌘D/⌘F/⌘K/⌘P/⌘↑↓), plain dark window, no
   lock by default, and http to localhost allowed. `scripts/mac-build.sh`.

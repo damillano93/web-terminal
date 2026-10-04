@@ -267,6 +267,13 @@ bash scripts/ios-build.sh
 
 With a free Apple ID the app expires after 7 days; run the script again.
 
+At home the apps connect straight to the server on the LAN (`WTLanURL` in
+`Info.plist`, or Settings → "Dirección local"), skipping Cloudflare. They only
+do so after the LAN address proves it is your server: it signs a random nonce
+with a key the app fetched over the authenticated public URL, so on another
+network the same IP is never trusted. A fixed "Servidor" URL in Settings turns
+the switching off.
+
 ---
 
 ## Mac app (optional)

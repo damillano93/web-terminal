@@ -27,8 +27,28 @@
 		</dict>
 		<dict>
 			<key>Type</key><string>PSGroupSpecifier</string>
+			<key>Title</key><string>Red local</string>
+			<key>FooterText</key><string>En casa, la app se conecta directamente al servidor (más rápido) tras comprobar que es el tuyo. Fuera, usa la dirección pública.</string>
+		</dict>
+		<dict>
+			<key>Type</key><string>PSToggleSwitchSpecifier</string>
+			<key>Title</key><string>Conexión directa en casa</string>
+			<key>Key</key><string>lan_auto</string>
+			<key>DefaultValue</key><true/>
+		</dict>
+		<dict>
+			<key>Type</key><string>PSTextFieldSpecifier</string>
+			<key>Title</key><string>Dirección local</string>
+			<key>Key</key><string>lan_url</string>
+			<key>DefaultValue</key><string></string>
+			<key>KeyboardType</key><string>URL</string>
+			<key>AutocapitalizationType</key><string>None</string>
+			<key>AutocorrectionType</key><string>No</string>
+		</dict>
+		<dict>
+			<key>Type</key><string>PSGroupSpecifier</string>
 			<key>Title</key><string>Servidor</string>
-			<key>FooterText</key><string>Vacío usa el servidor por defecto. Se aplica al volver a abrir la app.</string>
+			<key>FooterText</key><string>Vacío: elección automática (local en casa, pública fuera). Una URL aquí fija siempre ese servidor.</string>
 		</dict>
 		<dict>
 			<key>Type</key><string>PSTextFieldSpecifier</string>

@@ -1045,6 +1045,29 @@ app.get("/api/sessions", requireAuth, async (req, res) => {
   res.json({ sessions: list });
 });
 
+// ---------------------------------------------------------------------------
+// LAN shortcut for the native apps. At home the apps would rather talk to
+// this box directly (http://192.168.x.x:7681, no Cloudflare round trip), but
+// "something answers at that address" is not proof it is this server: on
+// another network the same IP is someone else's machine. So:
+//   1. over the public, Access-authenticated URL the app fetches a key;
+//   2. on the LAN it sends a random nonce and checks HMAC(key, nonce).
+// The key is derived from WEB_TERMINAL_SECRET, so it is stable across
+// restarts and changes if the secret is rotated.
+// ---------------------------------------------------------------------------
+const LAN_KEY = crypto.createHmac("sha256", SECRET).update("lan-key-v1").digest("hex");
+
+app.get("/api/lan-key", requireAuth, (req, res) => {
+  res.set("Cache-Control", "no-store").json({ key: LAN_KEY });
+});
+
+app.get("/api/lan-proof", requireAuth, (req, res) => {
+  const n = String(req.query.n || "");
+  if (!/^[0-9a-f]{32,128}$/.test(n)) return res.status(400).json({ error: "bad nonce" });
+  const proof = crypto.createHmac("sha256", Buffer.from(LAN_KEY, "hex")).update(n).digest("hex");
+  res.set("Cache-Control", "no-store").json({ proof });
+});
+
 // End one of your own sessions (the ✕ in "Open existing session"). Same
 // cross-site guard as uploads: an allowed Origin plus a header a plain form
 // cannot send.

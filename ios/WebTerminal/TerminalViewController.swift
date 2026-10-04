@@ -15,6 +15,8 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     private var pageReady = false
     private var pending: [String] = []
     private var workspaceID: String?
+    /// The server address in use (LAN at home, public elsewhere; see ConnectionManager).
+    private var currentBase: URL = Preferences.publicURL
 
     init(sceneKey: String) {
         self.sceneKey = sceneKey
@@ -55,8 +57,27 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         }
         view.backgroundColor = background
         lock.attach(to: view)
-        loadWorkspace(WorkspaceStore.workspace(scene: sceneKey,
-                                               isOnlyWindow: UIApplication.shared.openSessions.count <= 1))
+        NotificationCenter.default.addObserver(forName: ConnectionManager.networkChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.recheckConnection()
+        }
+        let first = WorkspaceStore.workspace(scene: sceneKey, isOnlyWindow: UIApplication.shared.openSessions.count <= 1)
+        Task { @MainActor in
+            currentBase = await ConnectionManager.shared.chooseBase()
+            loadWorkspace(first)
+        }
+    }
+
+    /// Back in the app or on a different network: switch between the LAN and
+    /// the public address if the right one changed. The page reloads on the same
+    /// workspace and reattaches its shells, which live on the server.
+    private func recheckConnection() {
+        Task { @MainActor in
+            let base = await ConnectionManager.shared.chooseBase()
+            if base != currentBase {
+                currentBase = base
+                loadWorkspace(workspaceID)
+            }
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -74,7 +95,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     }
 
     private func loadWorkspace(_ id: String?) {
-        var comps = URLComponents(url: Preferences.serverURL, resolvingAgainstBaseURL: false)!
+        var comps = URLComponents(url: currentBase, resolvingAgainstBaseURL: false)!
         if let id { comps.queryItems = [URLQueryItem(name: "w", value: id)] }
         pageReady = false
         webView.load(URLRequest(url: comps.url!))
@@ -85,6 +106,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     func willEnterForeground() {
         lock.willEnterForeground()
         run("wt.reconnect()")
+        recheckConnection()
         ExpiryWatch.check(from: self)
     }
 
@@ -120,6 +142,15 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             pageReady = true
             let queued = pending; pending = []
             queued.forEach(run)
+            // On the public address: learn the LAN key (once), then see whether
+            // we are at home and could go direct.
+            if currentBase == Preferences.publicURL {
+                let store = webView.configuration.websiteDataStore.httpCookieStore
+                Task { @MainActor in
+                    await ConnectionManager.shared.ensureKey(cookies: store)
+                    recheckConnection()
+                }
+            }
         case "tabs":
             QuickActions.update(workspace: body["workspace"] as? String,
                                 tabs: (body["tabs"] as? [[String: Any]]) ?? [])
@@ -242,7 +273,8 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
 
     private func isInternal(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return true }   // about:blank, blob:, data:
-        if host == Preferences.serverURL.host?.lowercased() { return true }
+        let known = [currentBase, Preferences.publicURL, Preferences.lanURL, Preferences.overrideURL]
+        if known.contains(where: { $0?.host?.lowercased() == host }) { return true }
         return host.hasSuffix(".cloudflareaccess.com")
     }
 

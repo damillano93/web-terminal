@@ -14,6 +14,9 @@
 	<key>LSRequiresIPhoneOS</key><true/>
 	<!-- The web-terminal to open. There is deliberately no in-app URL bar. -->
 	<key>WTServerURL</key><string>https://terminal.example.com/</string>
+	<!-- The same server on the home network; used only after it proves its identity (ConnectionManager). -->
+	<key>WTLanURL</key><string>http://192.168.1.10:7681/</string>
+	<key>NSLocalNetworkUsageDescription</key><string>Para conectarse directamente al servidor cuando estás en casa, más rápido que por internet.</string>
 	<!-- http to localhost / LAN addresses (server_url = http://127.0.0.1:7681 on the Mac mini). -->
 	<key>NSAppTransportSecurity</key>
 	<dict><key>NSAllowsLocalNetworking</key><true/></dict>

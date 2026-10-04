@@ -69,15 +69,27 @@ enum Preferences {
         #else
         let lock = true
         #endif
-        UserDefaults.standard.register(defaults: ["lock_enabled": lock, "lock_after": 5, "server_url": ""])
+        UserDefaults.standard.register(defaults: ["lock_enabled": lock, "lock_after": 5, "server_url": "",
+                                                  "lan_auto": true, "lan_url": ""])
     }
     static var lockEnabled: Bool { UserDefaults.standard.bool(forKey: "lock_enabled") }
     static var lockAfterSeconds: TimeInterval { TimeInterval(UserDefaults.standard.integer(forKey: "lock_after") * 60) }
-    static var serverURL: URL {
-        if let s = UserDefaults.standard.string(forKey: "server_url")?.trimmingCharacters(in: .whitespaces),
-           let u = URL(string: s), u.scheme == "https" || u.scheme == "http", u.host != nil { return u }
-        let raw = Bundle.main.object(forInfoDictionaryKey: "WTServerURL") as? String
-        return URL(string: raw ?? "") ?? URL(string: "https://terminal.example.com/")!
+    /// A fixed server set in Settings (e.g. http://127.0.0.1:7681 on the server
+    /// itself). When set, it is always used and no LAN switching happens.
+    static var overrideURL: URL? { url(UserDefaults.standard.string(forKey: "server_url")) }
+    static var publicURL: URL {
+        url(Bundle.main.object(forInfoDictionaryKey: "WTServerURL") as? String)
+            ?? URL(string: "https://terminal.example.com/")!
+    }
+    static var lanEnabled: Bool { UserDefaults.standard.bool(forKey: "lan_auto") }
+    static var lanURL: URL? {
+        url(UserDefaults.standard.string(forKey: "lan_url"))
+            ?? url(Bundle.main.object(forInfoDictionaryKey: "WTLanURL") as? String)
+    }
+    private static func url(_ raw: String?) -> URL? {
+        guard let s = raw?.trimmingCharacters(in: .whitespaces), !s.isEmpty,
+              let u = URL(string: s), u.scheme == "https" || u.scheme == "http", u.host != nil else { return nil }
+        return u
     }
 }
 
