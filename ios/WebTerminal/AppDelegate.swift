@@ -1,10 +1,12 @@
 import UIKit
+import UserNotifications
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         Preferences.registerDefaults()
+        UNUserNotificationCenter.current().delegate = Notifier.shared
         return true
     }
 

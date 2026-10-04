@@ -124,7 +124,6 @@ function isAllowedOrigin(origin) {
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
   return false;
 }
-const REPLAY_BYTES = 256 * 1024;               // ~256 KB of recent output for replay
 // Mouse-report filtering when the bare shell is in the foreground (see
 // Session.filterInput). SGR mouse reports (ESC[<b;x;yM / m) and focus
 // in/out (ESC[I / ESC[O) are the only sequences a browser terminal emits
@@ -173,103 +172,211 @@ function sanitizedShellEnv() {
   return out;
 }
 
-class Session {
-  constructor(id, opts, owner) {
-    this.id = id;
-    this.owner = owner;
-    this.cols = opts.cols;
-    this.rows = opts.rows;
-    this.term = pty.spawn(SHELL, ["--login"], {
-      name: "xterm-256color",
-      cols: this.cols,
-      rows: this.rows,
-      cwd: os.homedir(),
-      env: sanitizedShellEnv(),
-    });
-    this.buffer = [];           // recent output chunks (strings)
-    this.bufferBytes = 0;
-    this.maxBytes = REPLAY_BYTES;
-    this.ws = null;
-    this.detachTimer = null;
-    this.exited = false;
-    this.exitInfo = null;
-    this.inputLine = "";
-    this.createdAt = Date.now();
-    this.lastDataAt = this.createdAt;
+// ---------------------------------------------------------------------------
+// pty-host client. The shells live in pty-host.js, a separate long-lived
+// process, so restarting this server no longer kills them. This side keeps a
+// thin Session per PTY (owner, WebSocket, audit, input filtering) and relays.
+// ---------------------------------------------------------------------------
+const net = require("net");
+const childProcess = require("child_process");
+const PTY_HOST = require("./pty-host");
 
-    this.dataDisp = this.term.onData((d) => {
-      this.appendBuffer(d);
-      this.lastDataAt = Date.now();
-      if (this.ws && this.ws.readyState === 1) {
-        try { this.ws.send(JSON.stringify({ t: "d", d })); } catch (_) {}
+class HostClient {
+  constructor() {
+    this.sock = null;
+    this.buf = "";
+    this.rid = 0;
+    this.pending = new Map();
+    this.ready = this.connect();
+  }
+
+  async connect() {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      try {
+        await this.open();
+        const hello = await this.call({ op: "hello" });
+        audit("pty_host_connected", { pid: hello.pid, version: hello.version, expected: PTY_HOST.VERSION });
+        if (hello.version !== PTY_HOST.VERSION) {
+          console.warn(`pty-host is v${hello.version}, this server expects v${PTY_HOST.VERSION}; run scripts/restart-pty-host.sh (ends all shells)`);
+        }
+        // Shells that survived a server restart: pick them back up.
+        const list = await this.call({ op: "list" });
+        let adopted = 0;
+        for (const m of list.sessions || []) {
+          if (!sessions.has(m.id)) { sessions.set(m.id, new Session(m)); adopted++; }
+        }
+        if (adopted) audit("sessions_adopted", { count: adopted });
+        return;
+      } catch (_) {
+        if (attempt === 0) this.spawnHost();
+        await new Promise((r) => setTimeout(r, 250));
       }
+    }
+    throw new Error("pty-host unreachable at " + PTY_HOST.SOCKET);
+  }
+
+  // Detached and in its own session: when launchd (or anyone) stops this
+  // server, the host and its shells keep running.
+  spawnHost() {
+    const logFile = path.join(LOG_DIR, "web-terminal-ptyhost.log");
+    const out = fs.openSync(logFile, "a");
+    const child = childProcess.spawn(process.execPath, [path.join(__dirname, "pty-host.js")], {
+      detached: true,
+      stdio: ["ignore", out, out],
+      env: { ...sanitizedShellEnv(), WEB_TERMINAL_PTY_SOCKET: PTY_HOST.SOCKET },
+      cwd: os.homedir(),
     });
-    this.exitDisp = this.term.onExit(({ exitCode, signal }) => {
-      this.exited = true;
-      this.exitInfo = { exitCode, signal };
-      audit("session_exit", { id: this.id, owner: this.owner, exitCode, signal });
-      if (this.ws && this.ws.readyState === 1) {
-        try { this.ws.send(JSON.stringify({ t: "exit", exitCode, signal })); } catch (_) {}
-      }
-      // Schedule destruction shortly after exit so a returning client can see it.
-      setTimeout(() => this.destroy("post-exit"), SESSION_AFTER_EXIT_MS);
+    child.unref();
+    audit("pty_host_spawned", { pid: child.pid });
+  }
+
+  open() {
+    return new Promise((resolve, reject) => {
+      const sock = net.createConnection(PTY_HOST.SOCKET);
+      sock.setEncoding("utf8");
+      sock.once("connect", () => {
+        this.sock = sock;
+        sock.on("data", (chunk) => this.onData(chunk));
+        sock.on("close", () => this.onClose());
+        resolve();
+      });
+      sock.once("error", reject);
     });
   }
 
-  appendBuffer(d) {
-    this.buffer.push(d);
-    this.bufferBytes += d.length;
-    while (this.bufferBytes > this.maxBytes && this.buffer.length > 1) {
-      this.bufferBytes -= this.buffer.shift().length;
+  onData(chunk) {
+    this.buf += chunk;
+    let nl;
+    while ((nl = this.buf.indexOf("\n")) >= 0) {
+      const line = this.buf.slice(0, nl);
+      this.buf = this.buf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch (_) { continue; }
+      if (msg.rid != null) {
+        const p = this.pending.get(msg.rid);
+        if (p) { this.pending.delete(msg.rid); p(msg); }
+      } else if (msg.ev === "data") {
+        const s = sessions.get(msg.id);
+        if (s) s.onData(msg.d);
+      } else if (msg.ev === "exit") {
+        const s = sessions.get(msg.id);
+        if (s) s.onExit(msg.exitCode, msg.signal);
+      }
     }
   }
 
-  attach(ws) {
+  // The host went away (crashed or was restarted): its shells are gone too.
+  onClose() {
+    audit("pty_host_disconnected", { sessions: sessions.size });
+    this.sock = null;
+    for (const p of this.pending.values()) p({ ok: false, error: "host closed" });
+    this.pending.clear();
+    for (const s of [...sessions.values()]) s.onExit(null, "host-closed");
+    this.ready = this.connect();
+  }
+
+  send(msg) {
+    if (this.sock && !this.sock.destroyed) this.sock.write(JSON.stringify(msg) + "\n");
+  }
+
+  call(msg, timeoutMs = 5000) {
+    return new Promise((resolve, reject) => {
+      if (!this.sock) return reject(new Error("pty-host not connected"));
+      const rid = ++this.rid;
+      const timer = setTimeout(() => { this.pending.delete(rid); reject(new Error("pty-host timeout")); }, timeoutMs);
+      this.pending.set(rid, (r) => { clearTimeout(timer); resolve(r); });
+      this.send({ ...msg, rid });
+    });
+  }
+}
+
+const host = new HostClient();
+
+class Session {
+  constructor(meta) {
+    this.id = meta.id;
+    this.owner = meta.owner;
+    this.cols = meta.cols;
+    this.rows = meta.rows;
+    this.createdAt = meta.createdAt || Date.now();
+    this.lastDataAt = meta.lastDataAt || this.createdAt;
+    this.exited = !!meta.exited;
+    this.exitInfo = meta.exitInfo || null;
+    this.ws = null;
+    this.inputLine = "";
+    if (this.exited) this.scheduleCleanup();
+  }
+
+  static async spawn(id, { cols, rows, cwd }, owner) {
+    const r = await host.call({
+      op: "create", id, owner, cols, rows, cwd,
+      shell: SHELL, args: ["--login"], env: shellEnvWithIntegration(),
+    });
+    if (!r.ok) throw new Error(r.error || "create failed");
+    return new Session(r.session);
+  }
+
+  onData(d) {
+    this.lastDataAt = Date.now();
+    if (this.ws && this.ws.readyState === 1) {
+      try { this.ws.send(JSON.stringify({ t: "d", d })); } catch (_) {}
+    }
+  }
+
+  onExit(exitCode, signal) {
+    if (this.exited) return;
+    this.exited = true;
+    this.exitInfo = { exitCode, signal };
+    audit("session_exit", { id: this.id, owner: this.owner, exitCode, signal });
+    if (this.ws && this.ws.readyState === 1) {
+      try { this.ws.send(JSON.stringify({ t: "exit", exitCode, signal })); } catch (_) {}
+    }
+    this.scheduleCleanup();
+  }
+
+  // Keep an exited session around briefly so a returning client can see it.
+  scheduleCleanup() {
+    setTimeout(() => this.destroy("post-exit"), SESSION_AFTER_EXIT_MS);
+  }
+
+  // The exact screen (with scrollback, colours, alternate screen and modes),
+  // rebuilt by the host's mirror, instead of replaying raw output.
+  async attach(ws) {
     if (this.ws && this.ws !== ws) {
       try { this.ws.close(4001, "replaced by new connection"); } catch (_) {}
     }
     this.ws = ws;
-    if (this.detachTimer) {
-      clearTimeout(this.detachTimer);
-      this.detachTimer = null;
-    }
-    // Send recent output so the client can re-render the visible state.
-    const replay = this.buffer.join("");
-    if (replay) {
-      try { ws.send(JSON.stringify({ t: "d", d: replay })); } catch (_) {}
-    }
+    let snap = "";
+    try { snap = (await host.call({ op: "snapshot", id: this.id })).d || ""; } catch (_) {}
+    if (this.ws !== ws) return;
+    try { ws.send(JSON.stringify({ t: "snap", d: snap })); } catch (_) {}
     if (this.exited) {
       try { ws.send(JSON.stringify({ t: "exit", ...this.exitInfo })); } catch (_) {}
     }
   }
 
   detach(ws) {
-    if (this.ws !== ws) return;
-    this.ws = null;
+    if (this.ws === ws) this.ws = null;
   }
 
   resize(cols, rows) {
     this.cols = cols;
     this.rows = rows;
-    if (!this.exited) {
-      try { this.term.resize(cols, rows); } catch (_) {}
-    }
+    if (!this.exited) host.send({ op: "resize", id: this.id, cols, rows });
   }
 
   write(d) {
-    if (!this.exited) {
-      try { this.term.write(d); } catch (_) {}
-    }
+    if (!this.exited) host.send({ op: "input", id: this.id, d });
   }
 
-  // Name of the process currently owning the terminal (tcgetpgrp under the
-  // hood, via node-pty). Cached briefly: mouse-motion reports arrive dozens of
-  // times a second while the pointer moves.
-  foregroundProcess() {
+  // Name of the process owning the terminal; cached briefly, since mouse-motion
+  // reports arrive dozens of times a second while the pointer moves.
+  async foregroundProcess() {
     const now = Date.now();
     if (this._fgAt && now - this._fgAt < FG_CACHE_MS) return this._fg;
     let name = "";
-    try { name = String(this.term.process || ""); } catch (_) {}
+    try { name = (await host.call({ op: "fg", id: this.id }, 1000)).name || ""; } catch (_) {}
     this._fg = name;
     this._fgAt = now;
     return name;
@@ -280,12 +387,10 @@ class Session {
   // killed instead of exiting cleanly, nothing sends the matching reset, so the
   // browser keeps reporting every hover and zsh echoes it as "<35;12;40M".
   // When the login shell itself is in the foreground there is no consumer, so
-  // drop the reports and tell the terminal to stop tracking. The disable
-  // sequence goes into the replay buffer too, so a reconnect sees the same
-  // state.
-  filterInput(d) {
+  // drop the reports and tell the terminal to stop tracking.
+  async filterInput(d) {
     if (!MOUSE_REPORT_HINT.test(d)) return d;
-    const fg = this.foregroundProcess();
+    const fg = await this.foregroundProcess();
     if (fg !== SHELL_NAME) {
       this._healedShell = false;
       return d;
@@ -293,10 +398,8 @@ class Session {
     const cleaned = d.replace(MOUSE_REPORT_RE, "");
     if (cleaned !== d && !this._healedShell) {
       this._healedShell = true;
-      const off = MOUSE_TRACKING_OFF;
-      this.appendBuffer(off);
       if (this.ws && this.ws.readyState === 1) {
-        try { this.ws.send(JSON.stringify({ t: "d", d: off })); } catch (_) {}
+        try { this.ws.send(JSON.stringify({ t: "d", d: MOUSE_TRACKING_OFF })); } catch (_) {}
       }
       audit("mouse_reports_dropped", { id: this.id, owner: this.owner, fg });
     }
@@ -318,16 +421,27 @@ class Session {
   destroy(reason) {
     if (this._destroyed) return;
     this._destroyed = true;
-    if (this.detachTimer) clearTimeout(this.detachTimer);
     sessions.delete(this.id);
     audit("session_destroy", { id: this.id, owner: this.owner, reason });
-    try { this.dataDisp.dispose(); } catch (_) {}
-    try { this.exitDisp.dispose(); } catch (_) {}
-    try { this.term.kill(); } catch (_) {}
+    host.send({ op: "kill", id: this.id });
     if (this.ws && this.ws.readyState === 1) {
       try { this.ws.close(4002, "session destroyed"); } catch (_) {}
     }
   }
+}
+
+// Shell integration (OSC 7 cwd, OSC 133 prompt/command marks) for zsh: point
+// ZDOTDIR at shell-integration/zsh, whose rc files source the user's own and
+// then add the hooks. Other shells start unchanged.
+const INTEGRATION_DIR = path.join(__dirname, "shell-integration", "zsh");
+function shellEnvWithIntegration() {
+  const env = sanitizedShellEnv();
+  if (SHELL_NAME === "zsh" && fs.existsSync(INTEGRATION_DIR)) {
+    env.WT_USER_ZDOTDIR = process.env.ZDOTDIR || os.homedir();
+    env.ZDOTDIR = INTEGRATION_DIR;
+  }
+  env.TERM_PROGRAM = "web-terminal";
+  return env;
 }
 
 const sessions = new Map();
@@ -465,6 +579,12 @@ function sanitisePrefs(body) {
   if (typeof body?.bg === "string" && HEX_RE.test(body.bg)) out.bg = body.bg;
   if (typeof body?.fg === "string" && HEX_RE.test(body.fg)) out.fg = body.fg;
   if (body?.variant === "light" || body?.variant === "dark") out.variant = body.variant;
+  // Saved commands for the palette: plain strings, bounded.
+  if (Array.isArray(body?.snippets)) {
+    out.snippets = body.snippets
+      .filter((x) => typeof x === "string" && x.trim() && x.length <= 300)
+      .slice(0, 40);
+  }
   return Object.keys(out).length ? out : null;
 }
 
@@ -906,25 +1026,21 @@ function tabNamesBySession(owner) {
   return out;
 }
 
-app.get("/api/sessions", requireAuth, (req, res) => {
+app.get("/api/sessions", requireAuth, async (req, res) => {
   const me = currentUser(req);
   const names = tabNamesBySession(me);
-  const list = [];
-  for (const s of sessions.values()) {
-    if (s.owner !== me) continue;
-    list.push({
-      id: s.id,
-      tabName: names.get(s.id) || null,
-      process: s.exited ? null : s.foregroundProcess() || null,
-      cols: s.cols,
-      rows: s.rows,
-      exited: !!s.exited,
-      attached: !!s.ws,
-      createdAt: s.createdAt,
-      lastDataAt: s.lastDataAt,
-      bufferBytes: s.bufferBytes,
-    });
-  }
+  const mine = [...sessions.values()].filter((s) => s.owner === me);
+  const list = await Promise.all(mine.map(async (s) => ({
+    id: s.id,
+    tabName: names.get(s.id) || null,
+    process: s.exited ? null : (await s.foregroundProcess()) || null,
+    cols: s.cols,
+    rows: s.rows,
+    exited: !!s.exited,
+    attached: !!s.ws,
+    createdAt: s.createdAt,
+    lastDataAt: s.lastDataAt,
+  })));
   list.sort((a, b) => b.lastDataAt - a.lastDataAt);
   res.json({ sessions: list });
 });
@@ -932,7 +1048,7 @@ app.get("/api/sessions", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 // API: appearance preferences (per-account)
 // ---------------------------------------------------------------------------
-const prefsBodyParser = express.json({ limit: "4kb" });
+const prefsBodyParser = express.json({ limit: "32kb" });
 
 app.get("/api/prefs", requireAuth, (req, res) => {
   res.json(getPrefs(currentUser(req)));
@@ -1070,7 +1186,7 @@ app.delete("/api/workspace/:id", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 // Terminal WebSocket
 // ---------------------------------------------------------------------------
-app.ws("/ws/term", (ws, req) => {
+app.ws("/ws/term", async (ws, req) => {
   const me = currentUser(req);
   if (!me) {
     try { ws.close(1008, "unauthenticated"); } catch (_) {}
@@ -1088,48 +1204,51 @@ app.ws("/ws/term", (ws, req) => {
     return;
   }
 
+  // Messages that arrive while the session is being set up are queued, then
+  // handled strictly in order (filterInput may wait on the host).
+  const early = [];
+  let handler = (raw) => early.push(raw);
+  ws.on("message", (raw) => handler(raw));
+  let closed = false;
+  ws.on("close", () => { closed = true; });
+
+  try { await host.ready; } catch (_) {
+    try { ws.close(1011, "pty host unavailable"); } catch (_) {}
+    return;
+  }
+
   // Per-user cap on live PTYs. Each connection spawns a shell; without a ceiling
   // one account (or the local bypass) could exhaust the box's processes.
   let liveForUser = 0;
   for (const sInfo of sessions.values()) if (sInfo.owner === me && !sInfo.exited) liveForUser++;
-  if (liveForUser >= MAX_SESSIONS_PER_USER) {
-    audit("ws_session_cap", { ip: req.ip, me, live: liveForUser });
-    try { ws.close(1013, "too many sessions"); } catch (_) {}
-    return;
-  }
 
   const requestedId = typeof req.query.session === "string" ? req.query.session.slice(0, 64) : "";
   const cols = clamp(parseInt(req.query.cols, 10), 10, 1000, 80);
   const rows = clamp(parseInt(req.query.rows, 10), 5, 500, 24);
   const ip = req.ip;
+  // New shells may start in the directory the client was in (OSC 7 of the
+  // pane it was opened from). Only an existing absolute directory is used.
+  let cwd = undefined;
+  if (typeof req.query.cwd === "string" && req.query.cwd.length < 1024 && path.isAbsolute(req.query.cwd)) {
+    try { if (fs.statSync(req.query.cwd).isDirectory()) cwd = req.query.cwd; } catch (_) {}
+  }
 
   let session;
   let fresh = false;
-
-  if (requestedId && sessions.has(requestedId)) {
-    const existing = sessions.get(requestedId);
-    if (existing.owner !== me) {
-      audit("session_attach_denied", { id: requestedId, ip, me, owner: existing.owner });
-      // Fall through and create a fresh one instead of leaking existence.
-      const id = crypto.randomBytes(8).toString("hex");
-      try {
-        session = new Session(id, { cols, rows }, me);
-      } catch (e) {
-        audit("session_spawn_failed", { ip, me, err: String(e) });
-        try { ws.close(1011, "pty spawn failed"); } catch (_) {}
-        return;
-      }
-      sessions.set(id, session);
-      fresh = true;
-      audit("session_create", { id, ip, me, cols, rows, requestedId: requestedId || null, reason: "owner_mismatch" });
-    } else {
-      session = existing;
-      audit("session_attach", { id: requestedId, ip, me });
-    }
+  const existing = requestedId ? sessions.get(requestedId) : null;
+  if (existing && existing.owner === me) {
+    session = existing;
+    audit("session_attach", { id: requestedId, ip, me });
   } else {
+    if (existing) audit("session_attach_denied", { id: requestedId, ip, me, owner: existing.owner });
+    if (liveForUser >= MAX_SESSIONS_PER_USER) {
+      audit("ws_session_cap", { ip: req.ip, me, live: liveForUser });
+      try { ws.close(1013, "too many sessions"); } catch (_) {}
+      return;
+    }
     const id = crypto.randomBytes(8).toString("hex");
     try {
-      session = new Session(id, { cols, rows }, me);
+      session = await Session.spawn(id, { cols, rows, cwd }, me);
     } catch (e) {
       audit("session_spawn_failed", { ip, me, err: String(e) });
       try { ws.close(1011, "pty spawn failed"); } catch (_) {}
@@ -1137,28 +1256,31 @@ app.ws("/ws/term", (ws, req) => {
     }
     sessions.set(id, session);
     fresh = true;
-    audit("session_create", { id, ip, me, cols, rows, requestedId: requestedId || null });
+    audit("session_create", { id, ip, me, cols, rows, cwd: cwd || null, requestedId: requestedId || null,
+      reason: existing ? "owner_mismatch" : undefined });
   }
+  if (closed) { session.detach(ws); return; }
 
-  session.attach(ws);
   try {
     ws.send(JSON.stringify({ t: "session", id: session.id, fresh, cols: session.cols, rows: session.rows }));
   } catch (_) {}
+  await session.attach(ws);
 
-  ws.on("message", (raw) => {
+  let chain = Promise.resolve();
+  const process1 = async (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.t === "i" && typeof msg.d === "string") {
-      msg.d = session.filterInput(msg.d);
-      if (!msg.d) return;
-      for (const ch of msg.d) {
-        if (ch === "\r" || ch === "\n" || ch === "") session.flushInputLine(ip);
+      const d = await session.filterInput(msg.d);
+      if (!d) return;
+      for (const ch of d) {
+        if (ch === "\r" || ch === "\n" || ch === "\u0003") session.flushInputLine(ip);
         else {
           session.inputLine += ch;
           if (session.inputLine.length > 4096) session.inputLine = session.inputLine.slice(-4096);
         }
       }
-      session.write(msg.d);
+      session.write(d);
     } else if (msg.t === "r") {
       const c = clamp(parseInt(msg.cols, 10), 10, 1000, session.cols);
       const r = clamp(parseInt(msg.rows, 10), 5, 500, session.rows);
@@ -1168,7 +1290,9 @@ app.ws("/ws/term", (ws, req) => {
     } else if (msg.t === "ping") {
       try { ws.send(JSON.stringify({ t: "pong" })); } catch (_) {}
     }
-  });
+  };
+  handler = (raw) => { chain = chain.then(() => process1(raw)).catch(() => {}); };
+  for (const raw of early) handler(raw);
 
   ws.on("close", () => {
     session.flushInputLine(ip);
@@ -1189,8 +1313,9 @@ function shutdown(signal) {
   // Prefs writes are debounced by a second; a restart right after someone picks
   // a theme would otherwise throw the choice away.
   persistPrefs(true);
+  // The shells live in pty-host and outlive this process; just let clients go.
   for (const s of sessions.values()) {
-    try { s.destroy("shutdown"); } catch (_) {}
+    try { s.ws && s.ws.close(1012, "server restart"); } catch (_) {}
   }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();

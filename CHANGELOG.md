@@ -7,6 +7,18 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Shells survive server restarts: they live in `pty-host.js`, a detached
+  process the server starts once and reconnects to over a Unix socket.
+  `scripts/restart-pty-host.sh` restarts it (ending the shells) when needed.
+- Exact screen on reattach (scrollback, colours, alternate screen, modes)
+  from a headless xterm.js mirror in pty-host, instead of replaying output.
+- zsh shell integration (`shell-integration/zsh`, OSC 7 + OSC 133): new tabs
+  open in the current directory, automatic tab names, running / failed / new
+  output dots, Cmd+↑/↓ prompt jumps, and notifications for long commands and
+  OSC 9 / 777 messages (system notification in the iOS app or the browser,
+  toast in the page).
+- Command palette (Cmd+P / Ctrl+Shift+P / key bar): tabs, actions and saved
+  commands, stored per account.
 - `ios/`: native iOS wrapper app (WKWebView) without Safari's keyboard
   accessory bar, with a native clipboard bridge for OSC 52, plus
   `scripts/ios-build.sh` to build, sign and install it on a device.

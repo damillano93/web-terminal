@@ -27,6 +27,9 @@ const ICON_PATHS = {
   keyboardHide: '<rect x="2" y="2" width="20" height="13" rx="2"/><path d="M6 6h.01M10 6h.01M14 6h.01M18 6h.01M7 11h10M9 19l3 3 3-3"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+  command: '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>',
+  bell: '<path d="M10.27 21a2 2 0 0 0 3.46 0M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/>',
+  play: '<path d="M6 3l14 9-14 9z"/>',
   rows: '<rect x="3" y="5" width="18" height="6" rx="1.5"/><rect x="3" y="13" width="18" height="6" rx="1.5"/>',
   keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>',
   copy: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
@@ -269,6 +272,9 @@ function validPrefs(raw) {
     if (FONT_BY_ID.has(raw.fontFamily)) out.fontFamily = raw.fontFamily;
     const n = Math.round(Number(raw.fontSize));
     if (Number.isFinite(n) && n >= FONT_SIZE_MIN && n <= FONT_SIZE_MAX) out.fontSize = n;
+    if (Array.isArray(raw.snippets)) {
+      out.snippets = raw.snippets.filter((x) => typeof x === "string" && x.trim() && x.length <= 300).slice(0, 40);
+    }
   }
   return out;
 }
@@ -717,7 +723,13 @@ function installKeyBar() {
     return g;
   };
   handle.appendChild(group("start", toggle));
-  handle.appendChild(group("center", attachBtn, picker));
+  const paletteBtn = document.createElement("button");
+  paletteBtn.type = "button";
+  paletteBtn.className = "keybar-handle-btn";
+  paletteBtn.innerHTML = icon("command", 14) + "<span>comandos</span>";
+  paletteBtn.title = "Comandos, tabs y acciones";
+  paletteBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openPalette(); });
+  handle.appendChild(group("center", paletteBtn, attachBtn, picker));
   handle.appendChild(group("end", hideKb));
   bar.appendChild(handle);
 
@@ -1104,9 +1116,12 @@ function getLayoutRoot() { const t = currentTab(); return t ? t.layoutRoot : nul
 function setLayoutRoot(node) { const t = currentTab(); if (t) t.layoutRoot = node; }
 
 class Tab {
-  constructor(id, name, layoutRoot) {
+  constructor(id, name, layoutRoot, custom) {
     this.id = id;
     this.name = name;
+    // Named by the user (rename, or a session opened by name). Otherwise the
+    // tab shows what its shell is doing: "claude · public-api".
+    this.custom = custom != null ? !!custom : !/^Terminal \d+$/.test(name);
     this.layoutRoot = layoutRoot;
     this.lastActivePaneId = null;
   }
@@ -1116,6 +1131,16 @@ class Pane {
   constructor(initialSessionId) {
     this.id = nextPaneId++;
     this.sessionId = initialSessionId || null;   // restored from layout, or null for fresh
+    // Shell integration state (see shell-integration/zsh/integration.zsh).
+    this.cwd = null;
+    this.cmd = null;
+    this.running = false;
+    this.cmdStartedAt = 0;
+    this.lastExit = null;
+    this.unseen = false;
+    this.promptMarkers = [];
+    // A fresh shell opens where the user is working.
+    this.initialCwd = !initialSessionId && activePane ? activePane.cwd : null;
     this.parent = null;
     this.term = null;
     this.fit = null;
@@ -1344,16 +1369,89 @@ class Pane {
   // Shown as a thin bar on top of the pane and a percentage on its tab. Other
   // OSC 9 payloads (plain notifications) are left alone.
   installProgress() {
+    const P = this.term.parser;
     try {
-      this.term.parser.registerOscHandler(9, (data) => {
+      // OSC 9: "4;state;pct" is a progress report; anything else is a
+      // notification (iTerm2 style; Claude Code uses it).
+      P.registerOscHandler(9, (data) => {
         const m = /^4;(\d)(?:;(\d{1,3}))?/.exec(data);
-        if (!m) return false;
-        const state = Number(m[1]);
-        const pct = Math.max(0, Math.min(100, Number(m[2] || 0)));
-        this.setProgress(state === 0 ? null : { state, pct });
+        if (m) {
+          const state = Number(m[1]);
+          const pct = Math.max(0, Math.min(100, Number(m[2] || 0)));
+          this.setProgress(state === 0 ? null : { state, pct });
+        } else if (data.trim()) {
+          notify(this, data.trim().slice(0, 200), "", true);
+        }
         return true;
       });
+      // OSC 777;notify;title;body (rxvt / Ghostty / WezTerm style).
+      P.registerOscHandler(777, (data) => {
+        const m = /^notify;([^;]*);?(.*)$/s.exec(data);
+        if (m) notify(this, m[1].slice(0, 120), m[2].slice(0, 300), true);
+        return true;
+      });
+      // OSC 7: current directory, as file://host/path.
+      P.registerOscHandler(7, (data) => {
+        try {
+          const u = new URL(data);
+          if (u.protocol === "file:") { this.cwd = decodeURIComponent(u.pathname); scheduleTabRender(); }
+        } catch (_) {}
+        return true;
+      });
+      // OSC 133: A prompt start · C;cmd=… command started · D;code finished.
+      P.registerOscHandler(133, (data) => {
+        const kind = data[0];
+        if (kind === "A") {
+          const mk = this.term.registerMarker(0);
+          if (mk) this.promptMarkers.push(mk);
+          if (this.promptMarkers.length > 500) this.promptMarkers.splice(0, this.promptMarkers.length - 500);
+        } else if (kind === "C") {
+          const m = /cmd=([^;]*)/.exec(data);
+          let cmd = null;
+          try { cmd = m ? decodeURIComponent(m[1]) : null; } catch (_) {}
+          this.cmd = cmd;
+          this.running = true;
+          this.cmdStartedAt = Date.now();
+          scheduleTabRender();
+        } else if (kind === "D") {
+          const code = Number(data.split(";")[1]);
+          const took = this.cmdStartedAt ? Date.now() - this.cmdStartedAt : 0;
+          const was = this.cmd;
+          this.running = false;
+          this.lastExit = Number.isFinite(code) ? code : null;
+          this.failedUnseen = this.lastExit ? !this.isOnScreen() : false;
+          this.cmd = null;
+          scheduleTabRender();
+          if (was && took > LONG_COMMAND_MS) {
+            const ok = !this.lastExit;
+            notify(this, `${was} ${ok ? "terminó" : "falló (" + this.lastExit + ")"}`,
+              `Tardó ${fmtDuration(took)}`, false);
+          }
+        }
+        return true;
+      });
+      this.term.onBell(() => { if (!this.isOnScreen()) notify(this, "Campana", "", false); });
     } catch (_) {}
+  }
+
+  // Visible right now: its tab is the active one and the page is in front.
+  isOnScreen() {
+    if (document.hidden) return false;
+    const t = tabOfPane(this);
+    return !!t && t.id === activeTabId;
+  }
+
+  // Cmd+↑ / Cmd+↓: scroll to the previous / next prompt (OSC 133;A marks).
+  jumpPrompt(dir) {
+    if (!this.term) return;
+    const marks = this.promptMarkers.filter((m) => !m.isDisposed && m.line >= 0);
+    this.promptMarkers = marks;
+    const top = this.term.buffer.active.viewportY;
+    const target = dir < 0
+      ? marks.map((m) => m.line).filter((l) => l < top).pop()
+      : marks.map((m) => m.line).find((l) => l > top);
+    if (target != null) this.term.scrollToLine(target);
+    else if (dir > 0) this.term.scrollToBottom();
   }
 
   setProgress(p) {
@@ -1725,6 +1823,7 @@ class Pane {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     let url = `${proto}//${location.host}/ws/term?cols=${this.lastCols}&rows=${this.lastRows}`;
     if (this.sessionId) url += `&session=${encodeURIComponent(this.sessionId)}`;
+    else if (this.initialCwd) url += `&cwd=${encodeURIComponent(this.initialCwd)}`;
     this.setStatus(this.sessionId ? "reattaching…" : "connecting…");
 
     const ws = new WebSocket(url);
@@ -1788,7 +1887,17 @@ class Pane {
           try { this.term.write(`\r\n\x1b[33m[previous session expired — fresh shell]\x1b[0m\r\n`); } catch (_) {}
         }
         saveWorkspace();
+      } else if (m.t === "snap" && this.term) {
+        // The server's exact copy of the screen (scrollback, colours,
+        // alternate screen, modes). Replace whatever this pane shows with it;
+        // an empty one means a brand-new shell, so leave the pane alone.
+        if (m.d) {
+          try { this.term.reset(); } catch (_) {}
+          this.trackMouseGrab(m.d);
+          this.term.write(m.d);
+        }
       } else if (m.t === "d" && this.term) {
+        if (!this.unseen && !this.isOnScreen()) { this.unseen = true; scheduleTabRender(); }
         this.trackMouseGrab(m.d);
         this.term.write(m.d);
       } else if (m.t === "exit" && this.term) {
@@ -2234,7 +2343,7 @@ function workspaceData() {
   return {
     nextTabId, activeTabId,
     tabs: tabs.map((t) => ({
-      id: t.id, name: t.name,
+      id: t.id, name: t.name, custom: t.custom,
       layout: serializeLayout(t.layoutRoot),
     })),
   };
@@ -2310,7 +2419,7 @@ function createTab(opts) {
   if (id >= nextTabId) nextTabId = id + 1;
   const name = opts.name || `Terminal ${id}`;
   const layoutRoot = opts.layoutRoot || new Pane();
-  const tab = new Tab(id, name, layoutRoot);
+  const tab = new Tab(id, name, layoutRoot, opts.custom);
   tabs.push(tab);
   return tab;
 }
@@ -2328,6 +2437,7 @@ function activateTab(tabId) {
 
   activeTabId = tab.id;
   rootEl().appendChild(tab.layoutRoot.el);
+  forEachPane(tab.layoutRoot, (p) => { p.unseen = false; p.failedUnseen = false; });
 
   // Start any panes that haven't been started yet (fresh / restored tabs).
   forEachPane(tab.layoutRoot, (p) => { if (!p.term) p.start(); });
@@ -2384,6 +2494,7 @@ function renameTab(tabId, name) {
   const t = tabs.find((x) => x.id === tabId);
   if (!t) return;
   t.name = name;
+  t.custom = true;
   renderTabBar();
   saveWorkspace();
 }
@@ -2399,9 +2510,17 @@ function renderTabBar() {
     el.dataset.tabId = String(t.id);
     el.draggable = true;
 
+    const st = tabStatus(t);
+    if (st) {
+      const dot = document.createElement("span");
+      dot.className = "tab-dot " + st;
+      dot.title = { running: "Ejecutando", failed: "El último comando falló", unseen: "Salida nueva" }[st];
+      el.appendChild(dot);
+    }
     const name = document.createElement("span");
     name.className = "tab-name";
-    name.textContent = t.name;
+    name.textContent = tabDisplayName(t);
+    if (!t.custom && name.textContent !== t.name) name.title = "Nombre automático · doble clic para renombrar";
     el.appendChild(name);
 
     let prog = null;
@@ -2587,8 +2706,20 @@ function installShortcuts() {
       setZen(!zenMode);
       return;
     }
+    // Command palette: Cmd+P (macOS) / Ctrl+Shift+P.
+    if (e.key.toLowerCase() === "p" && (IS_MAC ? e.metaKey && !e.shiftKey : e.ctrlKey && e.shiftKey) && !e.altKey) {
+      e.preventDefault(); e.stopPropagation();
+      openPalette();
+      return;
+    }
     if (!activePane) return;
     const k = e.key.toLowerCase();
+    const jumpCombo = IS_MAC ? e.metaKey && !e.shiftKey : e.ctrlKey && e.shiftKey;
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && jumpCombo && !e.altKey) {
+      e.preventDefault(); e.stopPropagation();
+      activePane.jumpPrompt(e.key === "ArrowUp" ? -1 : 1);
+      return;
+    }
     const findCombo = IS_MAC ? e.metaKey && !e.shiftKey : e.ctrlKey && e.shiftKey;
     if (k === "f" && findCombo && !e.altKey) {
       e.preventDefault(); e.stopPropagation();
@@ -2620,6 +2751,229 @@ window.addEventListener("resize", () =>
 function bootFresh() {
   const tab = createTab();
   activateTab(tab.id);
+}
+
+// ---------------------------------------------------------------------------
+// Tab status, automatic names, notifications (shell integration consumers)
+// ---------------------------------------------------------------------------
+const LONG_COMMAND_MS = 15000;   // commands longer than this notify when they finish off-screen
+
+function tabOfPane(pane) {
+  for (const t of tabs) {
+    let hit = false;
+    forEachPane(t.layoutRoot, (p) => { if (p === pane) hit = true; });
+    if (hit) return t;
+  }
+  return null;
+}
+
+let _tabRenderQueued = false;
+function scheduleTabRender() {
+  if (_tabRenderQueued) return;
+  _tabRenderQueued = true;
+  requestAnimationFrame(() => { _tabRenderQueued = false; renderTabBar(); });
+}
+
+function tabStatus(t) {
+  let running = false, failed = false, unseen = false;
+  forEachPane(t.layoutRoot, (p) => {
+    if (p.running) running = true;
+    if (p.failedUnseen) failed = true;
+    if (p.unseen) unseen = true;
+  });
+  if (running) return "running";
+  if (failed) return "failed";
+  if (unseen && t.id !== activeTabId) return "unseen";
+  return null;
+}
+
+function dirLabel(cwd) {
+  if (!cwd) return null;
+  if (/^\/(Users|home)\/[^/]+\/?$/.test(cwd) || cwd === "/root") return "~";
+  const parts = cwd.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "/";
+}
+
+function tabDisplayName(t) {
+  if (t.custom) return t.name;
+  let pane = null;
+  if (t.lastActivePaneId != null) forEachPane(t.layoutRoot, (p) => { if (p.id === t.lastActivePaneId) pane = p; });
+  if (!pane) pane = firstLeaf(t.layoutRoot);
+  const dir = pane && dirLabel(pane.cwd);
+  if (pane && pane.running && pane.cmd) return dir ? `${pane.cmd} · ${dir}` : pane.cmd;
+  return dir || t.name;
+}
+
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + " s";
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m} min ${s % 60} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+// Tell the user about something that happened in a pane they are not looking
+// at: a system notification (iOS app, or the browser with permission), plus a
+// toast when the page itself is in front. Nothing when the pane is on screen.
+// `explicit` marks notifications a program asked for (OSC 9 / 777).
+function notify(pane, title, body, explicit) {
+  if (pane.isOnScreen()) return;
+  const t = tabOfPane(pane);
+  const where = t ? tabDisplayName(t) : "Terminal";
+  const fullTitle = `${where} · ${title}`;
+  if (IS_NATIVE) {
+    nativePost({ type: "notify", title: fullTitle, body, tabId: t ? t.id : null, workspace: WORKSPACE_ID });
+  } else if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    try {
+      const n = new Notification(fullTitle, { body, tag: "wt-" + (t ? t.id : "x"), icon: "/icons/icon-192.png" });
+      n.onclick = () => { window.focus(); if (t) activateTab(t.id); n.close(); };
+    } catch (_) {}
+  }
+  if (!document.hidden) showToast(fullTitle + (body ? " — " + body : ""), t ? () => activateTab(t.id) : null);
+}
+
+function showToast(text, onClick) {
+  let box = document.getElementById("wt-toasts");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "wt-toasts";
+    document.body.appendChild(box);
+  }
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "wt-toast";
+  el.innerHTML = icon("bell", 14) + "<span></span>";
+  el.querySelector("span").textContent = text;
+  el.addEventListener("click", () => { el.remove(); if (onClick) onClick(); });
+  box.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+// ---------------------------------------------------------------------------
+// Command palette (Cmd+P / Ctrl+Shift+P, the key bar's "comandos", or Cmd+P in
+// the iOS app): tabs by name, actions, and saved commands ("snippets", stored
+// per account with the other preferences).
+// ---------------------------------------------------------------------------
+const DEFAULT_SNIPPETS = ["claude", "claude -c", "claude --resume", "git status", "git pull"];
+
+function snippets() {
+  return Array.isArray(prefs.snippets) ? prefs.snippets : DEFAULT_SNIPPETS;
+}
+
+function saveSnippets(list) {
+  savePrefs({ snippets: list.slice(0, 40) });
+}
+
+function fuzzyScore(q, text) {
+  if (!q) return 1;
+  q = q.toLowerCase(); text = text.toLowerCase();
+  const idx = text.indexOf(q);
+  if (idx >= 0) return 100 - idx;
+  let ti = 0, score = 0;
+  for (const ch of q) {
+    const f = text.indexOf(ch, ti);
+    if (f < 0) return 0;
+    score += f === ti ? 2 : 1;
+    ti = f + 1;
+  }
+  return score;
+}
+
+function paletteItems(q) {
+  const items = [];
+  for (const t of tabs) {
+    items.push({ group: "Tabs", icon: "window", label: tabDisplayName(t), hint: t.id === activeTabId ? "actual" : "",
+      run: () => activateTab(t.id) });
+  }
+  const act = (label, ic, run, hint) => items.push({ group: "Acciones", icon: ic, label, run, hint: hint || "" });
+  const mod = IS_MAC ? "⌘" : "Ctrl+";
+  act("Nueva tab", "plus", () => wt.newTab(), mod + "T");
+  act("Dividir a la derecha", "splitRight", () => activePane && splitPane(activePane, "row"), mod + "D");
+  act("Dividir hacia abajo", "splitDown", () => activePane && splitPane(activePane, "col"));
+  act("Buscar en la terminal", "search", () => activePane && activePane.openSearch(), mod + "F");
+  act("Limpiar la terminal", "x", () => { try { activePane.term.clear(); } catch (_) {} });
+  act("Renombrar tab", "pencil", () => {
+    const t = currentTab();
+    const n = t && prompt("Nombre de la tab:", tabDisplayName(t));
+    if (t && n != null && n.trim()) renameTab(t.id, n.trim());
+  });
+  act("Exportar como HTML", "download", () => activePane && activePane.exportHtml());
+  act("Abrir sesión existente…", "history", () => openExistingSessionModal());
+  act("Apariencia…", "palette", () => openAppearanceModal());
+  act(zenMode ? "Salir del modo zen" : "Modo zen", zenMode ? "minimize" : "maximize", () => setZen(!zenMode));
+  for (const sn of snippets()) {
+    items.push({ group: "Comandos", icon: "play", label: sn, snippet: sn, hint: "↵ ejecutar · ⇧↵ escribir",
+      run: (insertOnly) => { if (activePane) { activePane.term.paste(sn); if (!insertOnly) activePane.sendInput("\r"); activePane.term.focus(); } } });
+  }
+  let out = items.map((it) => ({ ...it, score: fuzzyScore(q, it.label) })).filter((it) => it.score > 0);
+  if (q) out.sort((a, b) => b.score - a.score);
+  if (q && !snippets().includes(q)) {
+    out.push({ group: "Comandos", icon: "play", label: `Ejecutar: ${q}`, hint: "una vez",
+      run: () => { if (activePane) { activePane.term.paste(q); activePane.sendInput("\r"); activePane.term.focus(); } } });
+    out.push({ group: "Comandos", icon: "plus", label: `Guardar comando: ${q}`, hint: "",
+      run: () => { saveSnippets([q, ...snippets()]); } });
+  }
+  return out;
+}
+
+function openPalette() {
+  if (document.getElementById("wt-palette")) return;
+  const wrap = document.createElement("div");
+  wrap.id = "wt-palette";
+  wrap.className = "palette-bg";
+  wrap.innerHTML = '<div class="palette" role="dialog" aria-label="Comandos">' +
+    '<div class="palette-input">' + icon("command", 15) +
+    '<input id="wt-palette-q" type="text" placeholder="Buscar tabs, acciones o comandos…" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>' +
+    '<div class="palette-list" id="wt-palette-list"></div></div>';
+  document.body.appendChild(wrap);
+  const input = wrap.querySelector("#wt-palette-q");
+  const list = wrap.querySelector("#wt-palette-list");
+  let items = [], sel = 0;
+
+  const close = () => { wrap.remove(); try { activePane && activePane.term.focus(); } catch (_) {} };
+  const render = () => {
+    items = paletteItems(input.value.trim());
+    sel = Math.min(sel, Math.max(0, items.length - 1));
+    let lastGroup = null;
+    list.innerHTML = "";
+    items.forEach((it, i) => {
+      if (it.group !== lastGroup) {
+        const h = document.createElement("div");
+        h.className = "palette-group";
+        h.textContent = it.group;
+        list.appendChild(h);
+        lastGroup = it.group;
+      }
+      const row = document.createElement("div");
+      row.className = "palette-item" + (i === sel ? " on" : "");
+      row.innerHTML = icon(it.icon, 15) + '<span class="pl"></span><span class="ph"></span>' +
+        (it.snippet ? '<button type="button" class="pdel" title="Borrar comando">' + icon("x", 13) + "</button>" : "");
+      row.querySelector(".pl").textContent = it.label;
+      row.querySelector(".ph").textContent = it.hint || "";
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".pdel")) {
+          e.stopPropagation();
+          saveSnippets(snippets().filter((x) => x !== it.snippet));
+          render();
+          return;
+        }
+        close();
+        it.run(false);
+      });
+      list.appendChild(row);
+      if (i === sel) row.scrollIntoView({ block: "nearest" });
+    });
+    if (!items.length) list.innerHTML = '<div class="palette-empty">Sin resultados</div>';
+  };
+  input.addEventListener("input", () => { sel = 0; render(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); render(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(0, sel - 1); render(); }
+    else if (e.key === "Enter") { e.preventDefault(); const it = items[sel]; close(); if (it) it.run(e.shiftKey); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  });
+  wrap.addEventListener("pointerdown", (e) => { if (e.target === wrap) close(); });
+  render();
+  input.focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -2665,6 +3019,8 @@ window.wt = {
   find() { if (activePane) activePane.openSearch(); },
   clear() { try { activePane && activePane.term.clear(); } catch (_) {} },
   reconnect() { for (const t of tabs) forEachPane(t.layoutRoot, (p) => p.reconnectNow()); },
+  palette() { openPalette(); },
+  jumpPrompt(dir) { if (activePane) activePane.jumpPrompt(dir); },
   pasteText: pasteIntoActive,
   pasteImage(base64, mime) {
     if (!activePane) return;
@@ -2787,7 +3143,7 @@ function installContextMenu(pane) {
         const layoutRoot = deserializeLayout(t.layout);
         if (!layoutRoot) continue;
         layoutRoot.parent = null;
-        createTab({ id: t.id, name: t.name, layoutRoot });
+        createTab({ id: t.id, name: t.name, custom: t.custom, layoutRoot });
       }
       if (tabs.length === 0) bootFresh();
       else activateTab(stored.activeTabId && tabs.find(t => t.id === stored.activeTabId) ? stored.activeTabId : tabs[0].id);
@@ -2861,6 +3217,9 @@ function toggleMenu() {
     '<button data-act="export-html">' + icon("download") + 'Export pane as HTML</button>' +
     '<button data-act="close-pane" class="danger">' + icon("x") + 'Close active pane</button>' +
     '<div class="sep"></div>' +
+    '<button data-act="palette">' + icon("command") + 'Comandos…<span class="kbd">' + (IS_MAC ? "⌘P" : "Ctrl+Shift+P") + '</span></button>' +
+    (!IS_NATIVE && "Notification" in window && Notification.permission === "default"
+      ? '<button data-act="notify-on">' + icon("bell") + 'Activar notificaciones</button>' : "") +
     '<button data-act="copy-url">' + icon("link") + 'Copy workspace URL</button>' +
     '<div class="meta"><span>Workspace</span><span class="v" title="' + WORKSPACE_ID + '">' + WORKSPACE_ID.slice(0, 8) + '…</span></div>' +
     '<div class="meta"><span>Renderer</span><span class="v">' + RENDERER + '</span></div>' +
@@ -2901,6 +3260,10 @@ function toggleMenu() {
           const name = prompt("Rename tab:", t.name);
           if (name != null && name.trim()) renameTab(t.id, name.trim());
         }
+      } else if (act === "palette") {
+        openPalette();
+      } else if (act === "notify-on") {
+        try { Notification.requestPermission(); } catch (_) {}
       } else if (act === "copy-url") {
         // Same single mechanism as the terminal selection: writeText() is
         // denied in Chrome/Brave here, so this button used to do nothing.
@@ -2990,7 +3353,7 @@ async function openExistingSessionModal() {
         closeModal();
         // Add a new tab in this workspace pointing at the chosen session id.
         const pane = new Pane(s.id);
-        const tab = createTab({ name: s.tabName || ("session " + s.id.slice(0, 6)), layoutRoot: pane });
+        const tab = createTab({ name: s.tabName || ("session " + s.id.slice(0, 6)), custom: !!s.tabName, layoutRoot: pane });
         activateTab(tab.id);
       });
       sessList.appendChild(row);

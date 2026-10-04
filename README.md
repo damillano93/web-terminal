@@ -195,6 +195,43 @@ Then set `WEB_TERMINAL_ORIGIN=https://terminal.example.com`.
 
 ---
 
+## Shells that survive restarts
+
+The shells do not live in the web server. `server.js` starts **pty-host**
+(`pty-host.js`) once, detached in its own session, and talks to it over a Unix
+socket (`~/.web-terminal/pty-host.sock`). Restarting or updating the server
+(launchd, systemd, Docker) leaves every shell running; the new server adopts
+them, and reattaching clients get the exact screen back (scrollback, colours,
+alternate screen) from the host's headless xterm.js mirror.
+
+Only restarting pty-host ends the shells — needed only when `pty-host.js`
+changes: `bash scripts/restart-pty-host.sh`. A reboot ends them too.
+
+## Shell integration (zsh)
+
+For zsh, new shells start with `ZDOTDIR` pointed at `shell-integration/zsh/`,
+which loads your own `.zshenv`/`.zprofile`/`.zshrc`/`.zlogin` unchanged and then
+adds two hooks that print invisible escape sequences (OSC 7 and OSC 133). With
+them the terminal knows the current directory and when each command starts and
+ends, which gives:
+
+- new tabs and splits open in the current directory;
+- tabs named after what runs in them (`claude · public-api`) until you rename one;
+- a dot on the tab: running, last command failed, or new output;
+- **Cmd+↑ / Cmd+↓** (Ctrl+Shift+↑/↓ elsewhere) to jump between prompts;
+- a notification when a command that took over 15 s finishes in a tab you are
+  not looking at, or when a program sends one (OSC 9 / OSC 777, e.g. Claude Code
+  with its notifications set to iTerm2 in `/config`).
+
+Browser notifications need permission: ☰ → "Activar notificaciones".
+
+## Command palette
+
+**Cmd+P** (Ctrl+Shift+P elsewhere; "comandos" on the phone key bar): switch tabs
+by name, run actions, and keep your frequent commands. Type a command and pick
+"Guardar comando" to save it; Enter runs a saved command, Shift+Enter only
+types it. Saved commands are stored per account.
+
 ## Keyboard shortcuts
 
 | Keys | Action |
@@ -204,6 +241,8 @@ Then set `WEB_TERMINAL_ORIGIN=https://terminal.example.com`.
 | Cmd/Ctrl+click on a URL | Open it in a new tab |
 | Cmd+C (macOS) · Ctrl+Shift+C | Copy the selection |
 | Cmd/Ctrl+Shift+Z | Zen mode |
+| Cmd+P · Ctrl+Shift+P | Command palette |
+| Cmd+↑/↓ · Ctrl+Shift+↑/↓ | Jump to previous / next prompt |
 | Drop / paste an image | Upload it and type its path (Claude Code attaches it). On a phone: 📎 on the key bar |
 
 Apps inside the shell can also copy to your clipboard with OSC 52 (vim's

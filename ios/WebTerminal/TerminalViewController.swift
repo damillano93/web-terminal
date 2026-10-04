@@ -1,5 +1,6 @@
 import UIKit
 import WebKit
+import UserNotifications
 
 /// Full-screen WKWebView on the web-terminal. Over Safari / the PWA it adds: no
 /// keyboard bars, iPad keyboard shortcuts, quick reconnect on return, Face ID
@@ -49,6 +50,9 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        NotificationCenter.default.addObserver(forName: Notifier.openTab, object: nil, queue: .main) { [weak self] n in
+            if let id = n.userInfo?["tabId"] as? Int { self?.openFromNotification(tabId: id, workspace: n.userInfo?["workspace"] as? String) }
+        }
         view.backgroundColor = background
         lock.attach(to: view)
         loadWorkspace(WorkspaceStore.workspace(scene: sceneKey,
@@ -113,6 +117,9 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
                                 tabs: (body["tabs"] as? [[String: Any]]) ?? [])
         case "bell":
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case "notify":
+            Notifier.post(title: body["title"] as? String ?? "Terminal", body: body["body"] as? String ?? "",
+                          tabId: body["tabId"] as? Int, workspace: body["workspace"] as? String)
         case "copy":
             if let text = body["text"] as? String { UIPasteboard.general.string = text }
         case "paste":
@@ -134,6 +141,12 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         if (data?.count ?? 0) > 8_000_000 { data = image.jpegData(compressionQuality: 0.85); mime = "image/jpeg" }
         guard let b64 = data?.base64EncodedString() else { return }
         run("wt.pasteImage('\(b64)', '\(mime)')")
+    }
+
+    /// A tapped notification: show its tab if it belongs to this window.
+    func openFromNotification(tabId: Int, workspace: String?) {
+        guard workspace == nil || workspace == workspaceID else { return }
+        run("wt.switchTabId(\(tabId))")
     }
 
     // MARK: Quick actions
@@ -163,6 +176,9 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             key("k", .command, "Limpiar", #selector(clear)),
             key("r", [.command, .shift], "Recargar", #selector(reload)),
             key("n", [.command, .shift], "Nueva ventana", #selector(newWindow)),
+            key("p", .command, "Comandos", #selector(palette)),
+            key(UIKeyCommand.inputUpArrow, .command, "Comando anterior", #selector(promptUp)),
+            key(UIKeyCommand.inputDownArrow, .command, "Comando siguiente", #selector(promptDown)),
         ]
         for n in 1...9 {
             cmds.append(key("\(n)", .command, n == 9 ? "Última tab" : "Tab \(n)", #selector(switchTab(_:))))
@@ -184,6 +200,9 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     @objc private func clear() { run("wt.clear()") }
     @objc private func reload() { pageReady = false; webView.reload() }
     @objc private func newWindow() { openNewWindow() }
+    @objc private func palette() { run("wt.palette()") }
+    @objc private func promptUp() { run("wt.jumpPrompt(-1)") }
+    @objc private func promptDown() { run("wt.jumpPrompt(1)") }
     @objc private func switchTab(_ cmd: UIKeyCommand) {
         if let n = Int(cmd.input ?? "") { run("wt.switchTab(\(n))") }
     }
@@ -300,5 +319,47 @@ enum QuickActions {
                                                    userInfo: info))
         }
         UIApplication.shared.shortcutItems = items
+    }
+}
+
+/// Local notifications for terminal events (a long command finished, Claude
+/// Code asking for attention, a bell in another tab). The page decides when
+/// one is due; this only shows it, also while the app is in front.
+final class Notifier: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = Notifier()
+    static let openTab = Notification.Name("WTOpenTab")
+    private static var asked = false
+
+    static func post(title: String, body: String, tabId: Int?, workspace: String?) {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = shared
+        let send = {
+            let content = UNMutableNotificationContent()
+            content.title = title
+            if !body.isEmpty { content.body = body }
+            content.sound = .default
+            var info: [String: Any] = [:]
+            if let tabId { info["tabId"] = tabId }
+            if let workspace { info["workspace"] = workspace }
+            content.userInfo = info
+            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        }
+        if asked { send(); return }
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            asked = true
+            if granted { send() }
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler done: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        NotificationCenter.default.post(name: Self.openTab, object: nil, userInfo: info)
+        done()
     }
 }
