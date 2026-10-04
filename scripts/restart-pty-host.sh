@@ -7,7 +7,9 @@
 # The server notices the host went away, starts a new one and reconnects.
 set -euo pipefail
 SOCK="${WEB_TERMINAL_PTY_SOCKET:-$HOME/.web-terminal/pty-host.sock}"
-PIDS=$(pgrep -f "web-terminal/pty-host.js" || true)
+# -a: include ancestors. Run from a web-terminal shell, pty-host IS an ancestor,
+# and macOS pgrep leaves ancestors out by default.
+PIDS=$(pgrep -a -f "web-terminal/pty-host.js" || true)
 if [ -z "$PIDS" ]; then echo "pty-host is not running."; exit 0; fi
 read -r -p "This closes every open shell. Continue? [y/N] " ok
 [ "$ok" = "y" ] || [ "$ok" = "Y" ] || exit 1
