@@ -21,6 +21,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.webterminal
         INFOPLIST_FILE: WebTerminal/Info.plist
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "1,2,6"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
+        # Mac (Catalyst): same app, Mac idiom, named apart from Apple's Terminal.
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        WT_DISPLAY_NAME: Terminal
+        "WT_DISPLAY_NAME[sdk=macosx*]": Web Terminal

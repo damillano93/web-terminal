@@ -269,6 +269,22 @@ With a free Apple ID the app expires after 7 days; run the script again.
 
 ---
 
+## Mac app (optional)
+
+The same `ios/` project builds for the Mac (Mac Catalyst) as **Web Terminal**:
+its own window and Dock icon, every shortcut (⌘T, ⌘W, ⌘1…9, ⌘P…) reaches the
+terminal instead of the browser, a "Terminal" menu, native notifications and
+several windows (⌘N). Signed to run locally, so it does not expire.
+
+```bash
+SERVER=http://127.0.0.1:7681/ bash scripts/mac-build.sh   # on the server Mac itself
+bash scripts/mac-build.sh                                  # elsewhere (uses the public URL)
+```
+
+The server URL can also be changed in the app's Settings (⌘,).
+
+---
+
 ## Development
 
 ```bash

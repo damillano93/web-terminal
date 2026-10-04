@@ -16,6 +16,19 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         UISceneConfiguration(name: "Default", sessionRole: connectingSceneSession.role)
     }
 
+    #if targetEnvironment(macCatalyst)
+    // Mac menu bar: a "Terminal" menu with the same commands as the iPad, and
+    // the standard items whose shortcuts they need (⌘W, ⌘F, ⌘P) taken out.
+    override func buildMenu(with builder: UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        guard builder.system == .main else { return }
+        for id in [UIMenu.Identifier.close, .find, .print, .format, .toolbar] { builder.remove(menu: id) }
+        let menu = UIMenu(title: "Terminal", identifier: UIMenu.Identifier("webterminal.menu"),
+                          children: TerminalViewController.commands(mac: true))
+        builder.insertSibling(menu, afterMenu: .edit)
+    }
+    #endif
+
     // A window closed for good (swiped away in the iPad app switcher): forget its workspace.
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
         for s in sceneSessions { WorkspaceStore.forget(scene: s.persistentIdentifier) }
@@ -51,7 +64,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 /// User settings (iOS Settings → Terminal), backed by Settings.bundle.
 enum Preferences {
     static func registerDefaults() {
-        UserDefaults.standard.register(defaults: ["lock_enabled": true, "lock_after": 5, "server_url": ""])
+        #if targetEnvironment(macCatalyst)
+        let lock = false   // a Mac is usually already behind its own login
+        #else
+        let lock = true
+        #endif
+        UserDefaults.standard.register(defaults: ["lock_enabled": lock, "lock_after": 5, "server_url": ""])
     }
     static var lockEnabled: Bool { UserDefaults.standard.bool(forKey: "lock_enabled") }
     static var lockAfterSeconds: TimeInterval { TimeInterval(UserDefaults.standard.integer(forKey: "lock_after") * 60) }

@@ -29,6 +29,9 @@ All notable changes to this project are documented here. The format follows
   expires, home-screen quick actions (new tab + first tabs by name), image
   paste with Cmd+V, a haptic bell, and a right-click / long-press menu
   (copy, paste, paste image, find, clear).
+- Mac app: the iOS project also builds for Mac Catalyst as "Web Terminal",
+  with a Terminal menu (⌘T/⌘W/⌘1…9/⌘D/⌘F/⌘K/⌘P/⌘↑↓), plain dark window, no
+  lock by default, and http to localhost allowed. `scripts/mac-build.sh`.
 - `window.wt` page API and a `wtEvent` message channel for the app.
 - The whole Gogh catalog (~1250 themes) in the theme picker. The curated 46
   stay bundled; the rest (`public/gogh-themes-all.json`, ~400 KB) loads when

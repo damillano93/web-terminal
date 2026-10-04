@@ -61,6 +61,14 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        #if targetEnvironment(macCatalyst)
+        // A plain dark window: no title text or toolbar over the tab bar.
+        if let scene = view.window?.windowScene {
+            scene.titlebar?.titleVisibility = .hidden
+            scene.titlebar?.toolbar = nil
+            scene.sizeRestrictions?.minimumSize = CGSize(width: 520, height: 320)
+        }
+        #endif
         lock.lockOnLaunchIfNeeded()
         ExpiryWatch.check(from: self)
     }
@@ -164,9 +172,16 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         }
     }
 
-    // MARK: Hardware keyboard (shown in the iPad's hold-⌘ overlay)
+    // MARK: Keyboard commands. On iPad they show in the hold-⌘ overlay; on the
+    // Mac (Catalyst) the same list becomes the "Terminal" menu, built in
+    // AppDelegate.buildMenu, so it is only returned here on iOS.
 
-    override var keyCommands: [UIKeyCommand]? {
+    static func commands(mac: Bool) -> [UIKeyCommand] {
+        func key(_ input: String, _ mods: UIKeyModifierFlags, _ title: String, _ action: Selector) -> UIKeyCommand {
+            let c = UIKeyCommand(title: title, action: action, input: input, modifierFlags: mods)
+            c.wantsPriorityOverSystemBehavior = true
+            return c
+        }
         var cmds: [UIKeyCommand] = [
             key("t", .command, "Nueva tab", #selector(newTab)),
             key("w", .command, "Cerrar tab", #selector(closeTab)),
@@ -174,37 +189,45 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             key("d", [.command, .shift], "Dividir hacia abajo", #selector(splitDown)),
             key("f", .command, "Buscar", #selector(findInTerminal)),
             key("k", .command, "Limpiar", #selector(clear)),
-            key("r", [.command, .shift], "Recargar", #selector(reload)),
-            key("n", [.command, .shift], "Nueva ventana", #selector(newWindow)),
             key("p", .command, "Comandos", #selector(palette)),
             key(UIKeyCommand.inputUpArrow, .command, "Comando anterior", #selector(promptUp)),
             key(UIKeyCommand.inputDownArrow, .command, "Comando siguiente", #selector(promptDown)),
+            key("r", [.command, .shift], "Recargar", #selector(reload)),
         ]
+        // The Mac has File → New Window (⌘N) already.
+        if !mac { cmds.append(key("n", [.command, .shift], "Nueva ventana", #selector(newWindow))) }
+        // Same action for all nine: the menu bar needs each told apart, which the
+        // propertyList (the tab number) does.
         for n in 1...9 {
-            cmds.append(key("\(n)", .command, n == 9 ? "Última tab" : "Tab \(n)", #selector(switchTab(_:))))
+            let c = UIKeyCommand(title: n == 9 ? "Última tab" : "Tab \(n)", action: #selector(switchTab(_:)),
+                                 input: "\(n)", modifierFlags: .command, propertyList: n)
+            c.wantsPriorityOverSystemBehavior = true
+            cmds.append(c)
         }
         return cmds
     }
 
-    private func key(_ input: String, _ mods: UIKeyModifierFlags, _ title: String, _ action: Selector) -> UIKeyCommand {
-        let c = UIKeyCommand(title: title, action: action, input: input, modifierFlags: mods)
-        c.wantsPriorityOverSystemBehavior = true
-        return c
+    override var keyCommands: [UIKeyCommand]? {
+        #if targetEnvironment(macCatalyst)
+        return nil
+        #else
+        return Self.commands(mac: false)
+        #endif
     }
 
-    @objc private func newTab() { run("wt.newTab()") }
-    @objc private func closeTab() { run("wt.closeTab()") }
-    @objc private func splitRight() { run("wt.split('right')") }
-    @objc private func splitDown() { run("wt.split('down')") }
-    @objc private func findInTerminal() { run("wt.find()") }
-    @objc private func clear() { run("wt.clear()") }
-    @objc private func reload() { pageReady = false; webView.reload() }
-    @objc private func newWindow() { openNewWindow() }
-    @objc private func palette() { run("wt.palette()") }
-    @objc private func promptUp() { run("wt.jumpPrompt(-1)") }
-    @objc private func promptDown() { run("wt.jumpPrompt(1)") }
-    @objc private func switchTab(_ cmd: UIKeyCommand) {
-        if let n = Int(cmd.input ?? "") { run("wt.switchTab(\(n))") }
+    @objc func newTab() { run("wt.newTab()") }
+    @objc func closeTab() { run("wt.closeTab()") }
+    @objc func splitRight() { run("wt.split('right')") }
+    @objc func splitDown() { run("wt.split('down')") }
+    @objc func findInTerminal() { run("wt.find()") }
+    @objc func clear() { run("wt.clear()") }
+    @objc func reload() { pageReady = false; webView.reload() }
+    @objc func newWindow() { openNewWindow() }
+    @objc func palette() { run("wt.palette()") }
+    @objc func promptUp() { run("wt.jumpPrompt(-1)") }
+    @objc func promptDown() { run("wt.jumpPrompt(1)") }
+    @objc func switchTab(_ cmd: UIKeyCommand) {
+        if let n = (cmd.propertyList as? Int) ?? Int(cmd.input ?? "") { run("wt.switchTab(\(n))") }
     }
 
     private func openNewWindow() {
