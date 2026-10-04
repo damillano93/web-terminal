@@ -777,3 +777,33 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 .palette-item .pdel { background: transparent; border: 0; color: var(--muted); padding: 2px; border-radius: 4px; cursor: pointer; display: inline-flex; }
 .palette-item .pdel:hover { color: var(--error); }
 .palette-empty { color: var(--muted); padding: 14px; text-align: center; font-size: 0.9em; }
+
+/* ---- Compact layout ------------------------------------------------------ */
+.pane-status.quiet { display: none; }
+
+/* Key bar controls live in the tab bar (touch only). */
+.tabbar-tools { display: none; }
+#keybar.collapsed { display: none !important; }
+@media (hover: none) {
+  .tabbar-tools { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; margin-left: 4px; }
+  .tabbar-tool {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 30px; border-radius: 7px; border: 0;
+    background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .tabbar-tool:active, .tabbar-tool.on { color: var(--accent); background: var(--bg-elev-2); }
+
+  /* Tighter chrome: every pixel here is a terminal row on an iPad or phone. */
+  .tabs-bar { height: calc(34px + env(safe-area-inset-top)); padding-right: 2px; }
+  .tab { min-width: 72px; padding: 0 10px; font-size: 0.86em; }
+  .tab-close { width: 24px; height: 24px; }
+  .tab-add { padding: 0 12px; }
+  .menu-fab { width: 36px; height: 30px; }
+  .pane { margin: 2px; border-radius: 5px; }
+  .pane-body { padding: 3px 4px; }
+  /* With the key bar gone the terminal reaches the bottom edge; leave just
+     enough room to clear the home indicator. */
+  main#root { padding-bottom: calc(env(safe-area-inset-bottom) * 0.5); }
+  #keybar { padding-bottom: calc(2px + env(safe-area-inset-bottom) * 0.5); }
+  :root.kb-open main#root { padding-bottom: 0; }
+}

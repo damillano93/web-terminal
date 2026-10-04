@@ -669,8 +669,9 @@ function applyKeybarCollapsed() {
   bar.classList.toggle("collapsed", keybarCollapsed);
   const h = document.getElementById("keybar-toggle");
   if (h) {
-    h.innerHTML = icon(keybarCollapsed ? "chevronUp" : "chevronDown", 14) + "<span>" + (keybarCollapsed ? "teclas" : "ocultar teclas") + "</span>";
-    h.setAttribute("aria-label", keybarCollapsed ? "Show keys" : "Hide keys");
+    h.classList.toggle("on", !keybarCollapsed);
+    h.setAttribute("aria-label", keybarCollapsed ? "Mostrar teclas" : "Ocultar teclas");
+    h.title = keybarCollapsed ? "Mostrar teclas (esc, ctrl, flechas…)" : "Ocultar teclas";
   }
   // The terminal just gained or lost ~76px.
   requestAnimationFrame(() =>
@@ -687,51 +688,36 @@ function installKeyBar() {
   const bar = document.getElementById("keybar");
   if (!bar) return;
 
-  // Handle row: collapse on the left, dismiss-keyboard on the right. Kept out of
-  // the 7-wide grid so the Termux layout stays exactly as people know it.
-  const handle = document.createElement("div");
-  handle.className = "keybar-handle";
-  const toggle = document.createElement("button");
-  toggle.type = "button";
+  // The bar's controls (show/hide keys, palette, image, hide keyboard) sit as
+  // icons in the tab bar, so with the keys hidden the bar takes no room at all.
+  const tool = (iconName, label, size) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "tabbar-tool";
+    b.innerHTML = icon(iconName, size || 17);
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    return b;
+  };
+  const toggle = tool("rows", "Mostrar teclas");
   toggle.id = "keybar-toggle";
-  toggle.className = "keybar-handle-btn";
-  const hideKb = document.createElement("button");
-  hideKb.type = "button";
-  hideKb.className = "keybar-handle-btn";
-  hideKb.innerHTML = icon("keyboardHide", 15) + "<span>teclado</span>";
-  hideKb.title = "Hide the on-screen keyboard";
-  hideKb.setAttribute("aria-label", "Hide the on-screen keyboard");
+  const paletteBtn = tool("command", "Comandos, tabs y acciones");
+  paletteBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openPalette(); });
   // Attach: a phone has no drag & drop and iOS will not paste an image into a
   // web page reliably, so pick from Photos/Files instead.
-  const attachBtn = document.createElement("button");
-  attachBtn.type = "button";
-  attachBtn.className = "keybar-handle-btn";
-  attachBtn.innerHTML = icon("paperclip", 14) + "<span>imagen</span>";
-  attachBtn.title = "Subir una imagen y escribir su ruta";
-  attachBtn.setAttribute("aria-label", "Subir una imagen");
+  const attachBtn = tool("paperclip", "Subir una imagen y escribir su ruta");
+  const hideKb = tool("keyboardHide", "Ocultar el teclado");
   const picker = document.createElement("input");
   picker.type = "file";
   picker.accept = "image/*";
   picker.multiple = true;
   picker.hidden = true;
-  // Three groups on a grid as wide as the keys below, so the row lines up with
-  // them instead of scattering across a wide iPad screen.
-  const group = (cls, ...els) => {
-    const g = document.createElement("div");
-    g.className = "keybar-group " + cls;
-    for (const e of els) g.appendChild(e);
-    return g;
-  };
-  handle.appendChild(group("start", toggle));
-  const paletteBtn = document.createElement("button");
-  paletteBtn.type = "button";
-  paletteBtn.className = "keybar-handle-btn";
-  paletteBtn.innerHTML = icon("command", 14) + "<span>comandos</span>";
-  paletteBtn.title = "Comandos, tabs y acciones";
-  paletteBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openPalette(); });
-  handle.appendChild(group("center", paletteBtn, attachBtn, picker));
-  handle.appendChild(group("end", hideKb));
-  bar.appendChild(handle);
+  const tools = document.createElement("div");
+  tools.className = "tabbar-tools";
+  tools.append(toggle, paletteBtn, attachBtn, hideKb, picker);
+  const tabsBar = document.getElementById("tabs-bar");
+  const addBtn = document.getElementById("tab-add");
+  if (tabsBar && addBtn) tabsBar.insertBefore(tools, addBtn);
 
   // click, not pointerdown: iOS only opens a file picker from a real click.
   attachBtn.addEventListener("click", (e) => {
@@ -1228,9 +1214,12 @@ class Pane {
     installContextMenu(this);
   }
 
+  // "connected" is the normal state and not worth a row of the screen: the
+  // status line only shows for problems and brief messages.
   setStatus(text, isError) {
     this.statusEl.textContent = text;
     this.statusEl.classList.toggle("error", !!isError);
+    this.statusEl.classList.toggle("quiet", text === "connected" && !isError);
     this._baseStatus = text;
   }
 
@@ -1279,11 +1268,11 @@ class Pane {
     const base = this._baseStatus != null ? this._baseStatus : this.statusEl.textContent;
     this.statusEl.textContent = text;
     this.statusEl.classList.toggle("error", !!isError);
+    this.statusEl.classList.remove("quiet");
     if (this._flashTimer) clearTimeout(this._flashTimer);
     this._flashTimer = setTimeout(() => {
       this._flashTimer = null;
-      this.statusEl.textContent = base;
-      this.statusEl.classList.remove("error");
+      this.setStatus(base, false);
     }, ms || 1800);
   }
 

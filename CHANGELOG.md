@@ -69,6 +69,13 @@ All notable changes to this project are documented here. The format follows
 - The white scrollbar track down the side of every pane on macOS with a mouse;
   it is now thin and follows the theme.
 
+### Changed (layout)
+- Touch devices: the key bar's controls (show keys, palette, image, hide
+  keyboard) are icons in the tab bar, and the bar itself only appears while
+  its keys are shown. Tab bar 42 → 34 px, thinner pane margins, half the
+  bottom safe-area inset, and the "connected" status line is hidden unless
+  there is a problem or a message — about 60 px more terminal on an iPad.
+
 ### Removed
 - The touch copy overlay (key bar "copiar" button and long-press): copying
   now goes through the terminal itself (OSC 52 from apps such as Claude Code,
