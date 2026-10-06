@@ -293,6 +293,9 @@ class HostClient {
 
 const host = new HostClient();
 
+const OUTPUT_COALESCE_MS = 6;
+const OUTPUT_FLUSH_BYTES = 64 * 1024;
+
 class Session {
   constructor(meta) {
     this.id = meta.id;
@@ -317,9 +320,23 @@ class Session {
     return new Session(r.session);
   }
 
+  // Output is coalesced for a few milliseconds: a redraw arrives from the PTY
+  // as dozens of small chunks, and one frame instead of dozens saves headers,
+  // JSON wrapping and round trips on a slow link. A lone keystroke echo goes
+  // out after at most OUTPUT_COALESCE_MS, which is not noticeable.
   onData(d) {
     this.lastDataAt = Date.now();
-    if (this.ws && this.ws.readyState === 1) {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    this._out = (this._out || "") + d;
+    if (this._out.length >= OUTPUT_FLUSH_BYTES) return this.flushOutput();
+    if (!this._outTimer) this._outTimer = setTimeout(() => this.flushOutput(), OUTPUT_COALESCE_MS);
+  }
+
+  flushOutput() {
+    if (this._outTimer) { clearTimeout(this._outTimer); this._outTimer = null; }
+    const d = this._out;
+    this._out = "";
+    if (d && this.ws && this.ws.readyState === 1) {
       try { this.ws.send(JSON.stringify({ t: "d", d })); } catch (_) {}
     }
   }
@@ -328,6 +345,7 @@ class Session {
     if (this.exited) return;
     this.exited = true;
     this.exitInfo = { exitCode, signal };
+    this.flushOutput();
     audit("session_exit", { id: this.id, owner: this.owner, exitCode, signal });
     if (this.ws && this.ws.readyState === 1) {
       try { this.ws.send(JSON.stringify({ t: "exit", exitCode, signal })); } catch (_) {}
@@ -357,7 +375,11 @@ class Session {
   }
 
   detach(ws) {
-    if (this.ws === ws) this.ws = null;
+    if (this.ws === ws) {
+      if (this._outTimer) { clearTimeout(this._outTimer); this._outTimer = null; }
+      this._out = "";
+      this.ws = null;
+    }
   }
 
   resize(cols, rows) {
@@ -592,7 +614,21 @@ function sanitisePrefs(body) {
 // App
 // ---------------------------------------------------------------------------
 const app = express();
-expressWs(app);
+// Compress WebSocket frames (permessage-deflate). Terminal output, and above
+// all full-screen redraws (Claude Code, vim), shrinks several-fold, which is
+// what matters on a weak connection. Small frames (single keystroke echoes)
+// stay uncompressed: below the threshold the CPU is not worth it.
+expressWs(app, null, {
+  wsOptions: {
+    perMessageDeflate: {
+      threshold: 256,
+      zlibDeflateOptions: { level: 4, memLevel: 7 },
+      concurrencyLimit: 4,
+      serverNoContextTakeover: false,
+      clientNoContextTakeover: false,
+    },
+  },
+});
 
 app.disable("x-powered-by");
 app.set("trust proxy", "loopback, 127.0.0.1, ::1");
@@ -1275,7 +1311,7 @@ app.ws("/ws/term", async (ws, req) => {
   const existing = requestedId ? sessions.get(requestedId) : null;
   if (existing && existing.owner === me) {
     session = existing;
-    audit("session_attach", { id: requestedId, ip, me });
+    audit("session_attach", { id: requestedId, ip, me, deflate: !!(ws._extensions && ws._extensions["permessage-deflate"]) });
   } else {
     if (existing) audit("session_attach_denied", { id: requestedId, ip, me, owner: existing.owner });
     if (liveForUser >= MAX_SESSIONS_PER_USER) {

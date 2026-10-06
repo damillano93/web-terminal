@@ -1391,10 +1391,13 @@ class Pane {
       P.registerOscHandler(133, (data) => {
         const kind = data[0];
         if (kind === "A") {
+          this.atPrompt = true;
           const mk = this.term.registerMarker(0);
           if (mk) this.promptMarkers.push(mk);
           if (this.promptMarkers.length > 500) this.promptMarkers.splice(0, this.promptMarkers.length - 500);
         } else if (kind === "C") {
+          this.atPrompt = false;
+          this.clearPrediction();
           const m = /cmd=([^;]*)/.exec(data);
           let cmd = null;
           try { cmd = m ? decodeURIComponent(m[1]) : null; } catch (_) {}
@@ -1428,6 +1431,85 @@ class Pane {
     if (document.hidden) return false;
     const t = tabOfPane(this);
     return !!t && t.id === activeTabId;
+  }
+
+  // ---- Predictive echo (mosh-style, deliberately narrow) ------------------
+  // On a slow link every typed letter waits a full round trip before it shows.
+  // At the shell prompt — and only there, known from OSC 133 (after A, before
+  // C), so never in a password prompt or inside Claude Code — show typed
+  // characters at once, faint and underlined, as an overlay; the real echo
+  // replaces them as it arrives. Anything unusual (Enter, arrows, a paste,
+  // the alternate screen, mouse-tracking apps) just drops the prediction.
+  canPredict() {
+    const t = this.term;
+    return !!t && this.atPrompt && (this.rtt || LAST_RTT) >= PREDICT_MIN_RTT &&
+      t.buffer.active.type === "normal" && t.modes.mouseTrackingMode === "none" &&
+      t.buffer.active.viewportY === t.buffer.active.baseY;
+  }
+
+  predict(d) {
+    if (!this.canPredict()) { this.clearPrediction(); return; }
+    if (d === "\x7f") {                       // Backspace
+      if (this.pred) { this.pred = this.pred.slice(0, -1); this.renderPrediction(); }
+      return;
+    }
+    if (/^[\x20-\x7e]{1,3}$/.test(d)) {        // typing (not a paste)
+      this.pred = (this.pred || "") + d;
+      this.renderPrediction();
+      clearTimeout(this._predTimer);
+      // No echo at all (the app turned it off): stop showing anything.
+      this._predTimer = setTimeout(() => this.clearPrediction(), PREDICT_TIMEOUT_MS);
+      return;
+    }
+    this.clearPrediction();
+  }
+
+  // Server output arrived: drop the predicted characters it has now drawn.
+  reconcilePrediction(d) {
+    if (!this.pred) return;
+    const text = d.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-_]|[\x00-\x1f]/g, "");
+    let p = this.pred;
+    for (const ch of text) {
+      if (!p) break;
+      if (ch === p[0]) p = p.slice(1);
+    }
+    this.pred = p;
+    if (p) this.renderPrediction(); else this.clearPrediction();
+  }
+
+  renderPrediction() {
+    const t = this.term;
+    if (!this.pred || !t || !t.element) { this.clearPrediction(); return; }
+    let cell;
+    try { cell = t._core._renderService.dimensions.css.cell; } catch (_) {}
+    const screen = t.element.querySelector(".xterm-screen");
+    const body = this.host.parentElement;
+    const b = t.buffer.active;
+    if (!cell || !cell.width || !screen || b.cursorX + this.pred.length >= t.cols) { this.clearPrediction(); return; }
+    if (!this.predEl) {
+      this.predEl = document.createElement("span");
+      this.predEl.className = "wt-predict";
+      body.appendChild(this.predEl);
+    }
+    const sr = screen.getBoundingClientRect(), br = body.getBoundingClientRect();
+    const el = this.predEl;
+    el.textContent = this.pred;
+    el.style.left = (sr.left - br.left + b.cursorX * cell.width) + "px";
+    el.style.top = (sr.top - br.top + b.cursorY * cell.height) + "px";
+    el.style.height = cell.height + "px";
+    el.style.lineHeight = cell.height + "px";
+    el.style.fontFamily = t.options.fontFamily;
+    el.style.fontSize = t.options.fontSize + "px";
+    el.style.letterSpacing = Math.max(0, cell.width - measureCharWidth(t.options.fontFamily, t.options.fontSize)) + "px";
+    el.style.color = (t.options.theme && t.options.theme.foreground) || "#ddd";
+    el.style.background = (t.options.theme && t.options.theme.background) || "#000";
+    el.hidden = false;
+  }
+
+  clearPrediction() {
+    this.pred = "";
+    clearTimeout(this._predTimer);
+    if (this.predEl) this.predEl.hidden = true;
   }
 
   // Cmd+↑ / Cmd+↓: scroll to the previous / next prompt (OSC 133;A marks).
@@ -1836,13 +1918,16 @@ class Pane {
       this.setStatus("connected");
       this._reconnectAttempts = 0;
       try { ws.send(JSON.stringify({ t: "r", cols: this.lastCols, rows: this.lastRows })); } catch (_) {}
+      this._pingSentAt = Date.now();
+      try { ws.send(JSON.stringify({ t: "ping" })); } catch (_) {}
       // Keepalive: send ping every 25s so Cloudflare's idle timeout (~100s) doesn't kill us.
       if (this._keepaliveTimer) clearInterval(this._keepaliveTimer);
       this._keepaliveTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
+          this._pingSentAt = Date.now();
           try { ws.send(JSON.stringify({ t: "ping" })); } catch (_) {}
         }
-      }, 25000);
+      }, 10000);
     };
     ws.onerror = () => this.setStatus("connection error", true);
     ws.onclose = (e) => {
@@ -1905,6 +1990,7 @@ class Pane {
         }
       } else if (m.t === "d" && this.term) {
         if (!this.unseen && !this.isOnScreen()) { this.unseen = true; scheduleTabRender(); }
+        if (this.pred) { const d = m.d; this.term.write(d, () => this.reconcilePrediction(d)); this.trackMouseGrab(m.d); return; }
         this.trackMouseGrab(m.d);
         this.term.write(m.d);
       } else if (m.t === "exit" && this.term) {
@@ -1913,6 +1999,11 @@ class Pane {
         closeExitedPane(this);
       } else if (m.t === "pong") {
         this._pongAt = Date.now();
+        if (this._pingSentAt) {
+          this.rtt = this._pongAt - this._pingSentAt;
+          this._pingSentAt = 0;
+          LAST_RTT = this.rtt;
+        }
       }
     };
 
@@ -2023,6 +2114,7 @@ class Pane {
   sendInput(d) {
     if (!d) return;
     if (isBrokenMouseReport(d)) return;
+    this.predict(d);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try { this.ws.send(JSON.stringify({ t: "i", d })); } catch (_) {}
     }
@@ -2043,6 +2135,7 @@ class Pane {
     }
     if (ws.readyState !== WebSocket.OPEN) return;
     const sent = Date.now();
+    this._pingSentAt = sent;
     try { ws.send(JSON.stringify({ t: "ping" })); } catch (_) {}
     setTimeout(() => {
       if (this.ws === ws && ws.readyState === WebSocket.OPEN && !(this._pongAt >= sent)) {
@@ -2763,7 +2856,29 @@ function bootFresh() {
 // ---------------------------------------------------------------------------
 // Tab status, automatic names, notifications (shell integration consumers)
 // ---------------------------------------------------------------------------
-const LONG_COMMAND_MS = 15000;   // commands longer than this notify when they finish off-screen
+const LONG_COMMAND_MS = 15000;
+// Latest WebSocket round trip, and the predictive-echo thresholds.
+let LAST_RTT = 0;
+const PREDICT_MIN_RTT = 70;        // ms; on the LAN (≈10 ms) the real echo is instant anyway
+const PREDICT_TIMEOUT_MS = 1500;   // no echo by then: stop showing the prediction
+
+const _charWidthCache = new Map();
+function measureCharWidth(fontFamily, fontSize) {
+  const key = fontFamily + "|" + fontSize;
+  if (_charWidthCache.has(key)) return _charWidthCache.get(key);
+  const c = document.createElement("canvas").getContext("2d");
+  c.font = fontSize + "px " + fontFamily;
+  const w = c.measureText("M".repeat(20)).width / 20;
+  _charWidthCache.set(key, w);
+  return w;
+}   // commands longer than this notify when they finish off-screen
+
+function latencyLabel() {
+  const rtt = (activePane && activePane.rtt) || LAST_RTT;
+  const host = location.hostname;
+  const via = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) ? "red local" : "internet";
+  return rtt ? `${rtt} ms · ${via}` : `— · ${via}`;
+}
 
 function tabOfPane(pane) {
   for (const t of tabs) {
@@ -3280,6 +3395,7 @@ function toggleMenu() {
       ? '<button data-act="notify-on">' + icon("bell") + 'Activar notificaciones</button>' : "") +
     '<button data-act="copy-url">' + icon("link") + 'Copy workspace URL</button>' +
     '<div class="meta"><span>Workspace</span><span class="v" title="' + WORKSPACE_ID + '">' + WORKSPACE_ID.slice(0, 8) + '…</span></div>' +
+    '<div class="meta"><span>Latencia</span><span class="v">' + latencyLabel() + '</span></div>' +
     '<div class="meta"><span>Renderer</span><span class="v">' + RENDERER + '</span></div>' +
     (CURRENT_USER ? '<div class="meta"><span>Signed in</span><span class="v" title="' + CURRENT_USER + '">' + CURRENT_USER + '</span></div>' : "") +
     '<div class="sep"></div>' +

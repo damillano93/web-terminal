@@ -817,3 +817,9 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 }
 .sess-kill:hover { color: var(--error); border-color: var(--border); }
 .sess-kill.armed { background: var(--error); color: #fff; font-size: 0.8em; font-weight: 600; white-space: nowrap; }
+
+/* Predictive echo overlay (see Pane.predict). */
+.wt-predict {
+  position: absolute; z-index: 3; pointer-events: none; white-space: pre;
+  opacity: 0.6; text-decoration: underline dotted; text-underline-offset: 3px;
+}

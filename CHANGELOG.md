@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Faster on slow or distant links: WebSocket compression (permessage-deflate,
+  frames over 256 B), PTY output coalesced for 6 ms into one frame, and a
+  mosh-style predictive echo at the shell prompt (only between OSC 133 A and
+  C, normal screen, no mouse tracking, round trip ≥ 70 ms): typed characters
+  show at once, faint and underlined, until the real echo replaces them.
+  The round trip is measured with the keepalive pings (now every 10 s) and
+  shown in the menu ("Latencia").
 - Shells survive server restarts: they live in `pty-host.js`, a detached
   process the server starts once and reconnects to over a Unix socket.
   `scripts/restart-pty-host.sh` restarts it (ending the shells) when needed.
