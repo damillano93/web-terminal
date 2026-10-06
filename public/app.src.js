@@ -3144,7 +3144,13 @@ function installContextMenu(pane) {
     bootFresh();
   }
 
+  // The Mac app's web view can deliver one click on this button twice; a
+  // second "new tab" within half a second is that echo, not the user.
+  let lastNewTab = 0;
   document.getElementById("tab-add").addEventListener("click", () => {
+    const now = Date.now();
+    if (now - lastNewTab < 500) return;
+    lastNewTab = now;
     const tab = createTab();
     activateTab(tab.id);
   });

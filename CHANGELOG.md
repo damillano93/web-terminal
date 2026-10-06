@@ -69,6 +69,12 @@ All notable changes to this project are documented here. The format follows
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
 ### Fixed
+- Mac app: one click on "+" could open two tabs (the web view delivered the
+  click twice); a repeat within 500 ms is now ignored.
+- App image paste: Finder-copied image files are uploaded, and an image that
+  comes with only its own URL (a browser's "Copy Image") is pasted as an
+  image; real text still pastes as text. Previously anything besides a bare
+  image fell back to text and pasted nothing useful.
 - Garbled text after switching tabs with GPU rendering (top's "%CPU" came
   back as "dlVLb"): panes rebuild the shared WebGL glyph atlas when their tab
   returns to the screen.

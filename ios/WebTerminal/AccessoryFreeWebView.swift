@@ -16,9 +16,9 @@ final class AccessoryFreeWebView: WKWebView {
     private static let subclassName = "WTNoAccessoryContentView"
     private static var assistantKey: UInt8 = 0
 
-    /// Cmd+V / "Paste" with only an image on the pasteboard. WebKit would paste
-    /// nothing into the terminal's textarea, so hand the image to the app.
-    var onPasteImage: ((UIImage) -> Void)?
+    /// Cmd+V / "Paste": the app gets the first look and returns true if it took
+    /// the pasteboard as images to upload; otherwise WebKit pastes the text.
+    var onPaste: (() -> Bool)?
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
@@ -85,13 +85,10 @@ final class AccessoryFreeWebView: WKWebView {
                 typealias PasteFn = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
                 let callOriginal = unsafeBitCast(original, to: PasteFn.self)
                 let paste: @convention(block) (AnyObject, AnyObject?) -> Void = { view, sender in
-                    let pb = UIPasteboard.general
-                    if pb.hasImages, !pb.hasStrings, !pb.hasURLs, let image = pb.image,
-                       let web = (view as? UIView)?.enclosingWebView, let handler = web.onPasteImage {
-                        handler(image)
-                    } else {
-                        callOriginal(view, pasteSel, sender)
+                    if let web = (view as? UIView)?.enclosingWebView, let handler = web.onPaste, handler() {
+                        return
                     }
+                    callOriginal(view, pasteSel, sender)
                 }
                 class_addMethod(made, pasteSel, imp_implementationWithBlock(paste),
                                 method_getTypeEncoding(class_getInstanceMethod(base, pasteSel)!))

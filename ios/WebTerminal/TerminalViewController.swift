@@ -46,7 +46,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         if #available(iOS 16.4, *) { webView.isInspectable = true }
-        webView.onPasteImage = { [weak self] image in self?.pasteImage(image) }
+        webView.onPaste = { [weak self] in self?.pasteImagesFromPasteboard() ?? false }
         view = webView
     }
 
@@ -164,13 +164,50 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         case "paste":
             let wantImage = (body["image"] as? Bool) ?? false
             let pb = UIPasteboard.general
-            if (wantImage || !pb.hasStrings), let image = pb.image {
+            if wantImage, let image = pb.image ?? pb.images?.first {
                 pasteImage(image)
+            } else if pasteImagesFromPasteboard() {
+                break
             } else if let text = pb.string {
                 run("wt.pasteText(\(Self.jsString(text)))")
             }
         default: break
         }
+    }
+
+    /// Decide whether a paste is images (upload them) or text (let WebKit paste):
+    ///  - image files copied in the Finder → upload the files;
+    ///  - an image with nothing else, or with only its own URL (a browser's
+    ///    "Copy Image") → upload the image;
+    ///  - real text → text, even if an image came along (rich-text copies).
+    /// Returns true when it took the paste.
+    func pasteImagesFromPasteboard() -> Bool {
+        let pb = UIPasteboard.general
+        let imageExts: [String: String] = ["png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                                           "gif": "image/gif", "webp": "image/webp", "heic": "image/heic", "heif": "image/heic"]
+        if let files = pb.urls?.filter({ $0.isFileURL }), !files.isEmpty {
+            let images = files.filter { imageExts[$0.pathExtension.lowercased()] != nil || $0.pathExtension.lowercased() == "tiff" }
+            guard !images.isEmpty else { return false }
+            for url in images {
+                let ext = url.pathExtension.lowercased()
+                if let mime = imageExts[ext], let data = try? Data(contentsOf: url) {
+                    pasteImageData(data, mime: mime)
+                } else if let data = try? Data(contentsOf: url), let img = UIImage(data: data) {
+                    pasteImage(img)
+                }
+            }
+            return true
+        }
+        guard pb.hasImages, let image = pb.image ?? pb.images?.first else { return false }
+        let text = pb.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let textIsOnlyAURL = text.isEmpty || (URL(string: text)?.scheme.map { ["http", "https", "file", "data"].contains($0) } ?? false)
+        guard textIsOnlyAURL else { return false }
+        pasteImage(image)
+        return true
+    }
+
+    private func pasteImageData(_ data: Data, mime: String) {
+        run("wt.pasteImage('\(data.base64EncodedString())', '\(mime)')")
     }
 
     private func pasteImage(_ image: UIImage) {
