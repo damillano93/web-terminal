@@ -69,6 +69,12 @@ All notable changes to this project are documented here. The format follows
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
 ### Fixed
+- Dragging with the mouse inside apps that track it (Claude Code) went to
+  the app and looked like scrolling. A plain left drag now selects text;
+  Option+drag (Shift elsewhere) sends it to the app; the wheel still scrolls
+  the app.
+- iOS/Mac app: ⌘C / Edit → Copy copies the terminal selection (the page
+  reports it; WebKit alone copied nothing from the canvas).
 - An expired login (Cloudflare Access or the app's own) left the panes
   "reconnecting" forever until the app was reopened. The page now checks
   /api/me without following redirects when a reconnect fails, when it comes

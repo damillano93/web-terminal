@@ -15,6 +15,8 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     private var pageReady = false
     private var pending: [String] = []
     private var workspaceID: String?
+    /// The terminal's current selection, as reported by the page.
+    private var lastSelection = ""
     /// The server address in use (LAN at home, public elsewhere; see ConnectionManager).
     private var currentBase: URL = Preferences.publicURL
 
@@ -47,6 +49,12 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         if #available(iOS 16.4, *) { webView.isInspectable = true }
         webView.onPaste = { [weak self] in self?.pasteImagesFromPasteboard() ?? false }
+        webView.onCopy = { [weak self] in
+            guard let self, !self.lastSelection.isEmpty else { return false }
+            UIPasteboard.general.string = self.lastSelection
+            self.run("wt.copied(\(self.lastSelection.count))")
+            return true
+        }
         view = webView
     }
 
@@ -159,6 +167,8 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         case "notify":
             Notifier.post(title: body["title"] as? String ?? "Terminal", body: body["body"] as? String ?? "",
                           tabId: body["tabId"] as? Int, workspace: body["workspace"] as? String)
+        case "selection":
+            lastSelection = body["text"] as? String ?? ""
         case "copy":
             if let text = body["text"] as? String { UIPasteboard.general.string = text }
         case "paste":

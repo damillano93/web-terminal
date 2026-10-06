@@ -1683,6 +1683,33 @@ class Pane {
     this.host.addEventListener("mousedown", (e) => {
       this._dragFrom = { x: e.clientX, y: e.clientY, alt: e.altKey, shift: e.shiftKey };
     });
+
+    // Apps that track the mouse (Claude Code, vim, htop) normally get every
+    // click and drag, so dragging to select text "scrolls" or does nothing.
+    // Invert xterm's override key instead: a plain left-button press is shown
+    // to xterm as if Option (macOS) / Shift (elsewhere) were held, which makes
+    // it a text selection; holding the key sends the press to the app. The
+    // wheel still goes to the app. Capture phase, so xterm's own listeners on
+    // the inner element see the adjusted event.
+    this.host.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || !this.term || !this.term.modes || this.term.modes.mouseTrackingMode === "none") return;
+      const key = IS_MAC ? "altKey" : "shiftKey";
+      const held = e[key];
+      try { Object.defineProperty(e, key, { get: () => !held }); } catch (_) {}
+    }, true);
+
+    // The iOS/Mac app copies with its own Edit → Copy (⌘C), which never
+    // reaches the page; keep it told what is selected.
+    if (IS_NATIVE) {
+      let selTimer = null;
+      this.term.onSelectionChange(() => {
+        clearTimeout(selTimer);
+        selTimer = setTimeout(() => {
+          const sel = this.term.hasSelection() ? tidySelection(this.term.getSelection()) : "";
+          nativePost({ type: "selection", text: sel.slice(0, 2000000) });
+        }, 120);
+      });
+    }
     this.host.addEventListener("mouseup", (e) => {
       const from = this._dragFrom;
       this._dragFrom = null;
@@ -3045,6 +3072,7 @@ window.wt = {
     for (const t of tabs) forEachPane(t.layoutRoot, (p) => p.reconnectNow());
   },
   palette() { openPalette(); },
+  copied(n) { if (activePane) activePane.flashStatus(`Copiado · ${n} caracteres`); },
   jumpPrompt(dir) { if (activePane) activePane.jumpPrompt(dir); },
   pasteText: pasteIntoActive,
   pasteImage(base64, mime) {

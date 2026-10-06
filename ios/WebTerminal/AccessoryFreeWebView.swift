@@ -19,6 +19,9 @@ final class AccessoryFreeWebView: WKWebView {
     /// Cmd+V / "Paste": the app gets the first look and returns true if it took
     /// the pasteboard as images to upload; otherwise WebKit pastes the text.
     var onPaste: (() -> Bool)?
+    /// Edit → Copy (⌘C): the terminal's selection lives in a canvas, not the DOM,
+    /// so WebKit would copy nothing. Returns true when the app copied it.
+    var onCopy: (() -> Bool)?
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
@@ -92,6 +95,18 @@ final class AccessoryFreeWebView: WKWebView {
                 }
                 class_addMethod(made, pasteSel, imp_implementationWithBlock(paste),
                                 method_getTypeEncoding(class_getInstanceMethod(base, pasteSel)!))
+            }
+
+            let copySel = #selector(UIResponderStandardEditActions.copy(_:))
+            if let original = class_getMethodImplementation(base, copySel) {
+                typealias CopyFn = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
+                let callOriginal = unsafeBitCast(original, to: CopyFn.self)
+                let copy: @convention(block) (AnyObject, AnyObject?) -> Void = { view, sender in
+                    if let web = (view as? UIView)?.enclosingWebView, let handler = web.onCopy, handler() { return }
+                    callOriginal(view, copySel, sender)
+                }
+                class_addMethod(made, copySel, imp_implementationWithBlock(copy),
+                                method_getTypeEncoding(class_getInstanceMethod(base, copySel)!))
             }
 
             objc_registerClassPair(made)
