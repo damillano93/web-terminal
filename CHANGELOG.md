@@ -69,6 +69,11 @@ All notable changes to this project are documented here. The format follows
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
 ### Fixed
+- An expired login (Cloudflare Access or the app's own) left the panes
+  "reconnecting" forever until the app was reopened. The page now checks
+  /api/me without following redirects when a reconnect fails, when it comes
+  back into view, and when the iOS/Mac app returns; if the login is gone it
+  reloads into the login page.
 - Mac app: one click on "+" could open two tabs (the web view delivered the
   click twice); a repeat within 500 ms is now ignored.
 - App image paste: Finder-copied image files are uploaded, and an image that

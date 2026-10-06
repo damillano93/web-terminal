@@ -1838,7 +1838,8 @@ class Pane {
       // Codes that mean "don't reconnect": 1000 (normal), 4002 (session destroyed by us),
       // 1008 (auth) — auth means session expired, send to login.
       if (e.code === 1008) {
-        this.setStatus("session expired — reload to log in", true);
+        this.setStatus("session expired — opening the login…", true);
+        checkAuthAndRecover(true);
         return;
       }
       if (e.code === 4003) {
@@ -1856,6 +1857,10 @@ class Pane {
         return;
       }
       this.setStatus(`disconnected (${e.code}) — reconnecting…`, true);
+      // A lost login looks exactly like a network drop from here: Cloudflare
+      // answers the WebSocket upgrade with a redirect to its login page, and
+      // the pane would retry forever. Check, and go to the login if so.
+      if ((this._reconnectAttempts || 0) >= 1) checkAuthAndRecover();
       this.scheduleReconnect();
     };
     ws.onmessage = (ev) => {
@@ -2966,6 +2971,34 @@ function openPalette() {
 }
 
 // ---------------------------------------------------------------------------
+// Login expiry. When the Cloudflare Access (or app) session runs out, every
+// request is redirected to a login page, which a WebSocket or fetch cannot
+// follow — the panes just keep "reconnecting". Ask /api/me without following
+// redirects: a redirect or 401/403 means the session is gone, so reload the
+// page, which lands on the login. A network error means offline: keep trying.
+// ---------------------------------------------------------------------------
+let _authCheckAt = 0;
+async function checkAuthAndRecover(force) {
+  const now = Date.now();
+  if (!force && now - _authCheckAt < 10000) return;
+  _authCheckAt = now;
+  let r;
+  try {
+    r = await fetch("/api/me", { credentials: "include", redirect: "manual", cache: "no-store" });
+  } catch (_) {
+    return;   // offline or server down — the panes' own retries cover that
+  }
+  const ct = (r.headers.get("content-type") || "").toLowerCase();
+  const lost = r.type === "opaqueredirect" || r.status === 401 || r.status === 403 ||
+    (r.ok && !ct.includes("json"));
+  if (lost) {
+    showToast("La sesión caducó — abriendo el inicio de sesión…");
+    setTimeout(() => location.reload(), 600);
+  }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkAuthAndRecover(); });
+
+// ---------------------------------------------------------------------------
 // Native app bridge (ios/). The app injects window.__WT_NATIVE__ and listens on
 // the "wtEvent" message handler; it drives the page through window.wt. In a
 // plain browser nativePost is a no-op and window.wt is just unused.
@@ -3007,7 +3040,10 @@ window.wt = {
   split(dir) { if (activePane) splitPane(activePane, dir === "down" ? "col" : "row"); },
   find() { if (activePane) activePane.openSearch(); },
   clear() { try { activePane && activePane.term.clear(); } catch (_) {} },
-  reconnect() { for (const t of tabs) forEachPane(t.layoutRoot, (p) => p.reconnectNow()); },
+  reconnect() {
+    checkAuthAndRecover(true);
+    for (const t of tabs) forEachPane(t.layoutRoot, (p) => p.reconnectNow());
+  },
   palette() { openPalette(); },
   jumpPrompt(dir) { if (activePane) activePane.jumpPrompt(dir); },
   pasteText: pasteIntoActive,
