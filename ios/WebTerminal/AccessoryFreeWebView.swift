@@ -42,6 +42,34 @@ final class AccessoryFreeWebView: WKWebView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         refresh()
+        startScrollFixTimer()
+    }
+
+    // WebKit turns each scrollable element (the terminal's scrollback) into a
+    // native UIScrollView. On the Mac, and on an iPad with a mouse, those pan
+    // when the mouse is *dragged*, so selecting text in Claude Code also
+    // scrolled it. Let them pan only with a finger; the wheel and trackpad
+    // still scroll (that is a separate scroll-event path). WebKit creates these
+    // views as content changes, so re-apply periodically.
+    private var scrollFixTimer: Timer?
+    private func startScrollFixTimer() {
+        guard window != nil else { scrollFixTimer?.invalidate(); scrollFixTimer = nil; return }
+        restrictPanToTouch()
+        guard scrollFixTimer == nil else { return }
+        scrollFixTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.restrictPanToTouch()
+        }
+    }
+
+    private func restrictPanToTouch() {
+        let direct = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        func walk(_ v: UIView) {
+            if let sv = v as? UIScrollView, sv.panGestureRecognizer.allowedTouchTypes != direct {
+                sv.panGestureRecognizer.allowedTouchTypes = direct
+            }
+            v.subviews.forEach(walk)
+        }
+        walk(scrollView)
     }
 
     override func becomeFirstResponder() -> Bool {

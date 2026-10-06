@@ -1684,20 +1684,6 @@ class Pane {
       this._dragFrom = { x: e.clientX, y: e.clientY, alt: e.altKey, shift: e.shiftKey };
     });
 
-    // Apps that track the mouse (Claude Code, vim, htop) normally get every
-    // click and drag, so dragging to select text "scrolls" or does nothing.
-    // Invert xterm's override key instead: a plain left-button press is shown
-    // to xterm as if Option (macOS) / Shift (elsewhere) were held, which makes
-    // it a text selection; holding the key sends the press to the app. The
-    // wheel still goes to the app. Capture phase, so xterm's own listeners on
-    // the inner element see the adjusted event.
-    this.host.addEventListener("mousedown", (e) => {
-      if (e.button !== 0 || !this.term || !this.term.modes || this.term.modes.mouseTrackingMode === "none") return;
-      const key = IS_MAC ? "altKey" : "shiftKey";
-      const held = e[key];
-      try { Object.defineProperty(e, key, { get: () => !held }); } catch (_) {}
-    }, true);
-
     // The iOS/Mac app copies with its own Edit → Copy (⌘C), which never
     // reaches the page; keep it told what is selected.
     if (IS_NATIVE) {

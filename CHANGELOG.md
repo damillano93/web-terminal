@@ -72,10 +72,10 @@ All notable changes to this project are documented here. The format follows
 - Mac app: Ctrl+C (and every Control+letter) never reached the shell. The
   app now takes Control+letter itself while a terminal has focus and sends
   the control byte; in the find bar, palette or dialogs keys behave as usual.
-- Dragging with the mouse inside apps that track it (Claude Code) went to
-  the app and looked like scrolling. A plain left drag now selects text;
-  Option+drag (Shift elsewhere) sends it to the app; the wheel still scrolls
-  the app.
+- Mac app (and iPad with a mouse): dragging to select in Claude Code also
+  scrolled the scrollback, because WebKit's native scroll views pan on a
+  mouse drag. They now pan only with a finger; wheel and trackpad scrolling
+  are unchanged, and the drag stays with the app (Claude's own selection).
 - iOS/Mac app: ⌘C / Edit → Copy copies the terminal selection (the page
   reports it; WebKit alone copied nothing from the canvas).
 - An expired login (Cloudflare Access or the app's own) left the panes
