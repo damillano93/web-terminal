@@ -22,6 +22,11 @@ final class AccessoryFreeWebView: WKWebView {
     /// Edit → Copy (⌘C): the terminal's selection lives in a canvas, not the DOM,
     /// so WebKit would copy nothing. Returns true when the app copied it.
     var onCopy: (() -> Bool)?
+    /// Control+letter with the terminal focused. On the Mac (Catalyst) WebKit does
+    /// not reliably deliver these to the page, so Ctrl+C never interrupted
+    /// anything; the app sends the control byte itself. Returns true if taken.
+    var onControlKey: ((Character) -> Bool)?
+    fileprivate var swallowedKeys = Set<Int>()
 
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
@@ -107,6 +112,37 @@ final class AccessoryFreeWebView: WKWebView {
                 }
                 class_addMethod(made, copySel, imp_implementationWithBlock(copy),
                                 method_getTypeEncoding(class_getInstanceMethod(base, copySel)!))
+            }
+
+            // pressesBegan/Ended: route Control+letter to onControlKey, swallow the
+            // matching key-up, and pass everything else to WebKit.
+            typealias PressFn = @convention(c) (AnyObject, Selector, AnyObject, AnyObject?) -> Void
+            let beganSel = #selector(UIResponder.pressesBegan(_:with:))
+            let endedSel = #selector(UIResponder.pressesEnded(_:with:))
+            if let ob = class_getMethodImplementation(base, beganSel), let oe = class_getMethodImplementation(base, endedSel) {
+                let origBegan = unsafeBitCast(ob, to: PressFn.self)
+                let origEnded = unsafeBitCast(oe, to: PressFn.self)
+                let began: @convention(block) (AnyObject, AnyObject, AnyObject?) -> Void = { view, presses, event in
+                    if let web = (view as? UIView)?.enclosingWebView, let handler = web.onControlKey,
+                       let set = presses as? Set<UIPress>, set.count == 1, let key = set.first?.key,
+                       key.modifierFlags.intersection([.control, .command, .alternate, .shift]) == .control,
+                       let ch = key.charactersIgnoringModifiers.lowercased().first, handler(ch) {
+                        web.swallowedKeys.insert(key.keyCode.rawValue)
+                        return
+                    }
+                    origBegan(view, beganSel, presses, event)
+                }
+                let ended: @convention(block) (AnyObject, AnyObject, AnyObject?) -> Void = { view, presses, event in
+                    if let web = (view as? UIView)?.enclosingWebView, let set = presses as? Set<UIPress>,
+                       let code = set.first?.key?.keyCode.rawValue, web.swallowedKeys.remove(code) != nil {
+                        return
+                    }
+                    origEnded(view, endedSel, presses, event)
+                }
+                class_addMethod(made, beganSel, imp_implementationWithBlock(began),
+                                method_getTypeEncoding(class_getInstanceMethod(base, beganSel)!))
+                class_addMethod(made, endedSel, imp_implementationWithBlock(ended),
+                                method_getTypeEncoding(class_getInstanceMethod(base, endedSel)!))
             }
 
             objc_registerClassPair(made)

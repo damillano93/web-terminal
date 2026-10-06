@@ -69,6 +69,9 @@ All notable changes to this project are documented here. The format follows
   deleted. The endpoint needs auth, an allowed Origin and a custom header.
 
 ### Fixed
+- Mac app: Ctrl+C (and every Control+letter) never reached the shell. The
+  app now takes Control+letter itself while a terminal has focus and sends
+  the control byte; in the find bar, palette or dialogs keys behave as usual.
 - Dragging with the mouse inside apps that track it (Claude Code) went to
   the app and looked like scrolling. A plain left drag now selects text;
   Option+drag (Shift elsewhere) sends it to the app; the wheel still scrolls

@@ -17,6 +17,8 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     private var workspaceID: String?
     /// The terminal's current selection, as reported by the page.
     private var lastSelection = ""
+    /// Whether the page's keyboard focus is in a terminal (reported by the page).
+    private var terminalFocused = true
     /// The server address in use (LAN at home, public elsewhere; see ConnectionManager).
     private var currentBase: URL = Preferences.publicURL
 
@@ -49,6 +51,11 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         if #available(iOS 16.4, *) { webView.isInspectable = true }
         webView.onPaste = { [weak self] in self?.pasteImagesFromPasteboard() ?? false }
+        webView.onControlKey = { [weak self] ch in
+            guard let self, self.terminalFocused, let code = Self.controlCode(ch) else { return false }
+            self.run("wt.sendInput(\(Self.jsString(String(UnicodeScalar(code)))))")
+            return true
+        }
         webView.onCopy = { [weak self] in
             guard let self, !self.lastSelection.isEmpty else { return false }
             UIPasteboard.general.string = self.lastSelection
@@ -128,6 +135,18 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         webView.evaluateJavaScript("window.wt && (\(js))", completionHandler: nil)
     }
 
+    /// Control+a…z → 0x01…0x1a; Control+[ \\ ] → ESC, FS, GS.
+    private static func controlCode(_ ch: Character) -> UInt8? {
+        guard let a = ch.asciiValue else { return nil }
+        switch a {
+        case 97...122: return a - 96
+        case 91: return 27
+        case 92: return 28
+        case 93: return 29
+        default: return nil
+        }
+    }
+
     private static func jsString(_ s: String) -> String {
         let data = try? JSONSerialization.data(withJSONObject: [s])
         let arr = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
@@ -167,6 +186,8 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         case "notify":
             Notifier.post(title: body["title"] as? String ?? "Terminal", body: body["body"] as? String ?? "",
                           tabId: body["tabId"] as? Int, workspace: body["workspace"] as? String)
+        case "focus":
+            terminalFocused = (body["terminal"] as? Bool) ?? true
         case "selection":
             lastSelection = body["text"] as? String ?? ""
         case "copy":

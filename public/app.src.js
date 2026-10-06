@@ -3035,6 +3035,17 @@ function nativePost(msg) {
   try { window.webkit.messageHandlers.wtEvent.postMessage(msg); } catch (_) {}
 }
 
+// Tell the app whether the keyboard focus is in a terminal (vs. the find bar,
+// the palette, a dialog), so it only takes over Control+letter there.
+if (IS_NATIVE) {
+  const reportFocus = () => {
+    const el = document.activeElement;
+    nativePost({ type: "focus", terminal: !!(el && el.classList && el.classList.contains("xterm-helper-textarea")) });
+  };
+  document.addEventListener("focusin", reportFocus);
+  document.addEventListener("focusout", () => setTimeout(reportFocus, 0));
+}
+
 let _tabsReportTimer = null;
 function reportTabsToNative() {
   if (!IS_NATIVE) return;
@@ -3073,6 +3084,8 @@ window.wt = {
   },
   palette() { openPalette(); },
   copied(n) { if (activePane) activePane.flashStatus(`Copiado · ${n} caracteres`); },
+  // Raw bytes to the active shell (the app's Control+letter path).
+  sendInput(d) { if (activePane && typeof d === "string") activePane.sendInput(d); },
   jumpPrompt(dir) { if (activePane) activePane.jumpPrompt(dir); },
   pasteText: pasteIntoActive,
   pasteImage(base64, mime) {
