@@ -37,7 +37,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         let ucc = config.userContentController
         ucc.add(WeakScriptHandler(self), name: "wtClipboard")
         ucc.add(WeakScriptHandler(self), name: "wtEvent")
-        ucc.addUserScript(WKUserScript(source: "window.__WT_NATIVE__ = { platform: 'ios', version: 2 };",
+        ucc.addUserScript(WKUserScript(source: "window.__WT_NATIVE__ = { platform: 'ios', version: 3 };",
                                        injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         webView = AccessoryFreeWebView(frame: .zero, configuration: config)
@@ -94,6 +94,37 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             }
         }
     }
+
+    #if targetEnvironment(macCatalyst)
+    // Full screen with an auto-hiding menu bar: the window covers the whole
+    // screen and the menu bar slides down over the tab bar whenever the
+    // pointer nears the top, swallowing clicks on its buttons. Keep that strip
+    // free. (With the menu bar always shown, or under a notch, the window
+    // already stops below it and nothing is reserved.)
+    private var topReserve: CGFloat = -1
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let reserve = Self.fullScreenMenuBarReserve(for: view.window)
+        guard reserve != topReserve else { return }
+        topReserve = reserve
+        run("wt.setTopInset(\(Int(reserve)))")
+    }
+
+    static func fullScreenMenuBarReserve(for window: UIWindow?) -> CGFloat {
+        guard let window, let screen = window.windowScene?.screen else { return 0 }
+        let w = window.bounds.size, s = screen.bounds.size
+        guard abs(w.width - s.width) < 1, abs(w.height - s.height) < 1 else { return 0 }
+        var height: CGFloat = 24
+        if let app = NSClassFromString("NSApplication") as? NSObject.Type,
+           let shared = app.value(forKey: "sharedApplication") as? NSObject,
+           let menu = shared.value(forKey: "mainMenu") as? NSObject,
+           let h = menu.value(forKey: "menuBarHeight") as? NSNumber, h.doubleValue > 0 {
+            height = CGFloat(h.doubleValue)
+        }
+        return height
+    }
+    #endif
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -167,6 +198,9 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
                 WorkspaceStore.remember(id, scene: sceneKey)
             }
             pageReady = true
+            #if targetEnvironment(macCatalyst)
+            topReserve = -1; view.setNeedsLayout()   // a fresh page needs the inset again
+            #endif
             let queued = pending; pending = []
             queued.forEach(run)
             // On the public address: learn the LAN key (once), then see whether
@@ -190,6 +224,11 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             terminalFocused = (body["terminal"] as? Bool) ?? true
         case "selection":
             lastSelection = body["text"] as? String ?? ""
+        case "open":
+            if let str = body["url"] as? String, let url = URL(string: str),
+               ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                UIApplication.shared.open(url)
+            }
         case "copy":
             if let text = body["text"] as? String { UIPasteboard.general.string = text }
         case "paste":
@@ -486,3 +525,4 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         done()
     }
 }
+

@@ -30,3 +30,4 @@ logs/
 *.bak-*
 *.bak.*
 .DS_Store
+shell-integration/zsh/.zsh_history

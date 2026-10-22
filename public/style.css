@@ -105,8 +105,10 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 .tabs-bar {
   display: flex; align-items: stretch;
   flex: 0 0 auto;
-  height: calc(30px + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) 4px 0 8px;
+  /* --wt-top-extra: the Mac app in full screen keeps the menu bar's strip
+     free, or the menu bar slides over the tab bar and eats its clicks. */
+  height: calc(30px + env(safe-area-inset-top) + var(--wt-top-extra, 0px));
+  padding: calc(env(safe-area-inset-top) + var(--wt-top-extra, 0px)) 4px 0 8px;
   background: var(--bg-elev); border-bottom: 1px solid var(--border);
 }
 .tabs-list {
@@ -355,7 +357,8 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
   background: var(--fg); border-radius: 2px;
 }
 .menu-popover {
-  position: fixed; top: 34px; right: 6px;
+  position: fixed; top: 34px; right: 6px;   /* top/max-height set from the button */
+  overflow-y: auto; overscroll-behavior: contain;
   background: var(--bg-elev-2); color: var(--fg);
   border: 1px solid var(--border); border-radius: 10px;
   padding: 4px; min-width: 220px;
@@ -444,10 +447,18 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 .pane-body .term-host .xterm-viewport,
 .pane-body .term-host .xterm-screen { width: 100% !important; height: 100% !important; }
 .pane-body .term-host canvas { display: block; }
+/* Floats over the terminal: in the layout it resized the terminal every time
+   it appeared ("Copiado"), which moved the text under the selection. */
+.pane { position: relative; }
 .pane-status {
+  position: absolute; right: 10px; bottom: 8px; z-index: 5;
+  max-width: calc(100% - 20px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--font-mono); font-size: 0.78em; color: var(--muted);
-  padding: 2px 6px;
+  padding: 3px 8px; border-radius: 6px;
+  background: var(--bg-elev-2); border: 1px solid var(--border);
+  pointer-events: none;
 }
+.pane-status:empty { display: none; }
 .pane-status.error { color: var(--error); }
 
 /* OSC 9;4 progress: thin bar on top of the pane, percentage on its tab. */
@@ -605,7 +616,7 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 
 /* The tab bar was the element paying back safe-area-inset-top. With it hidden,
    the debt moves here, or the first row of output sits under the status bar. */
-:root.zen main#root { padding-top: env(safe-area-inset-top); }
+:root.zen main#root { padding-top: calc(env(safe-area-inset-top) + var(--wt-top-extra, 0px)); }
 
 /* Reclaim the frame too — margin, radius and border are ~10px per pane. The
    active outline stays only when it still carries information, i.e. in a split. */
@@ -620,7 +631,7 @@ main#root { flex: 1 1 auto; min-height: 0; display: flex; }
 :root.zen #zen-exit {
   display: inline-flex; align-items: center; justify-content: center;
   position: fixed; z-index: 900;
-  top: calc(6px + env(safe-area-inset-top));
+  top: calc(6px + env(safe-area-inset-top) + var(--wt-top-extra, 0px));
   right: calc(6px + env(safe-area-inset-right));
   width: 30px; height: 30px;
   background: var(--bg-elev); color: var(--muted);

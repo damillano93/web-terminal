@@ -1290,8 +1290,11 @@ class Pane {
         // Plain click would fight selection and TUIs with mouse tracking;
         // require the platform modifier, like native terminals do.
         if (!(IS_MAC ? e.metaKey : e.ctrlKey)) return;
-        const w = window.open(uri, "_blank", "noopener,noreferrer");
-        if (w) w.opener = null;
+        openLink(uri);
+      }, {
+        // Say how to open it: plain click selects, like any terminal.
+        hover: () => { this.host.title = (IS_MAC ? "⌘" : "Ctrl") + "+clic para abrir el enlace"; },
+        leave: () => { this.host.title = ""; },
       }));
     } catch (_) {}
     try {
@@ -1750,6 +1753,15 @@ class Pane {
       // xterm only lets Option+drag override that, and only with this enabled —
       // without it there is no way to select anything in those apps.
       macOptionClickForcesSelection: true,
+      // OSC 8 hyperlinks (Claude Code, ls --hyperlink, gh). xterm's default
+      // asks with confirm(), which the iOS/Mac app never shows: links did
+      // nothing there. Same rule as plain URLs: Cmd/Ctrl+click opens.
+      linkHandler: {
+        activate: (e, uri) => { if (IS_MAC ? e.metaKey : e.ctrlKey) openLink(uri); },
+        hover: () => { if (this.host) this.host.title = (IS_MAC ? "⌘" : "Ctrl") + "+clic para abrir el enlace"; },
+        leave: () => { if (this.host) this.host.title = ""; },
+        allowNonHttpProtocols: false,
+      },
     });
     if (FitAddonCtor) {
       this.fit = new FitAddonCtor();
@@ -3132,6 +3144,16 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) chec
 // plain browser nativePost is a no-op and window.wt is just unused.
 // ---------------------------------------------------------------------------
 const IS_NATIVE = !!window.__WT_NATIVE__;
+// The apps hand links to the system (default browser); WKWebView's
+// window.open path drops them on the Mac.
+function openLink(uri) {
+  if (!/^https?:\/\//i.test(uri)) return;
+  // App version 3+ opens it natively; older installs keep window.open.
+  if (IS_NATIVE && (window.__WT_NATIVE__.version || 0) >= 3) { nativePost({ type: "open", url: uri }); return; }
+  const w = window.open(uri, "_blank", "noopener,noreferrer");
+  if (w) w.opener = null;
+}
+
 function nativePost(msg) {
   try { window.webkit.messageHandlers.wtEvent.postMessage(msg); } catch (_) {}
 }
@@ -3184,6 +3206,7 @@ window.wt = {
     for (const t of tabs) forEachPane(t.layoutRoot, (p) => p.reconnectNow());
   },
   palette() { openPalette(); },
+  setTopInset(px) { document.documentElement.style.setProperty("--wt-top-extra", (Number(px) || 0) + "px"); },
   copied(n) { if (activePane) activePane.flashStatus(`Copiado · ${n} caracteres`); },
   // Raw bytes to the active shell (the app's Control+letter path).
   sendInput(d) { if (activePane && typeof d === "string") activePane.sendInput(d); },
@@ -3401,6 +3424,12 @@ function toggleMenu() {
     '<div class="sep"></div>' +
     '<button data-act="logout" class="danger">' + icon("logout") + 'Sign out</button>';
   root.appendChild(pop);
+  // Open under the button, whatever the tab bar's height (safe area, Mac title
+  // bar, full screen), and scroll instead of running off a short window.
+  const fr = fab.getBoundingClientRect();
+  const top = Math.round(fr.bottom + 4);
+  pop.style.top = top + "px";
+  pop.style.maxHeight = Math.max(160, window.innerHeight - top - 8) + "px";
 
   pop.querySelectorAll("button[data-act]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
