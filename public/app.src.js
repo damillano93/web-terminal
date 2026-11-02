@@ -1771,6 +1771,7 @@ class Pane {
     this.loadAddons();
     fontReady(currentFont()).then(() => this.refreshFont());
     this.hardenInputElement();
+    this.installDragRepair();
     try { this.term.focus(); } catch (_) {}
 
     // Watch drags so we can explain a selection that never happens.
@@ -2024,6 +2025,54 @@ class Pane {
       try { this.term.onBell(() => nativePost({ type: "bell" })); } catch (_) {}
       this._ondataAttached = true;
     }
+  }
+
+  // Mouse drags inside apps that re-send their mouse modes mid-drag.
+  //
+  // Claude Code (tui: fullscreen) answers every button press by sending
+  // ESC[?1000h ESC[?1002h ESC[?1003h again. xterm 5.5 applies them one by one,
+  // so for an instant the protocol is plain 1000 (press/release, no drag), and
+  // its protocol-change handler then REMOVES the document "mousemove" listener
+  // that forwards drag motion. Switching on to 1002/1003 just after only stores
+  // the handler again; it is attached on the next mousedown. Result: the app
+  // gets the press and the release but no motion in between, so its selection
+  // never grows and there is nothing to copy.
+  //
+  // Forward the drag ourselves while a press belongs to the app. Same xterm
+  // services as its own handler; an event xterm also reports is a duplicate of
+  // the last one for the same cell, which coreMouseService drops, so nothing is
+  // ever sent twice.
+  installDragRepair() {
+    const core = this.term && this.term._core;
+    const cms = core && core.coreMouseService;
+    const ms = core && core._mouseService;
+    const sel = core && core._selectionService;
+    if (!cms || !ms || typeof cms.triggerMouseEvent !== "function" ||
+        typeof ms.getMouseReportCoords !== "function") return;
+    const onMove = (ev) => {
+      if (!(ev.buttons & 7)) { stop(); return; }
+      if (!cms.areMouseEventsActive || !core.screenElement) return;
+      const pos = ms.getMouseReportCoords(ev, core.screenElement);
+      if (!pos) return;
+      // xterm's own mapping of e.buttons (left, then middle, then right).
+      const button = ev.buttons & 1 ? 0 : ev.buttons & 4 ? 1 : 2;
+      cms.triggerMouseEvent({
+        col: pos.col, row: pos.row, x: pos.x, y: pos.y, button, action: 32 /* MOVE */,
+        ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey,
+      });
+    };
+    const stop = () => {
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", stop, true);
+    };
+    this.host.addEventListener("mousedown", (ev) => {
+      stop();
+      if (!cms.areMouseEventsActive) return;
+      // Option+drag (Shift elsewhere) is xterm's own text selection: leave it.
+      try { if (sel && sel.shouldForceSelection(ev)) return; } catch (_) {}
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", stop, true);
+    }, true);
   }
 
   // Finger scrolling inside a full-screen app (Claude Code, vim, htop, less).
