@@ -362,6 +362,7 @@ class Session {
   // rebuilt by the host's mirror, instead of replaying raw output.
   async attach(ws) {
     if (this.ws && this.ws !== ws) {
+      this.ws._wtReplacedAt = Date.now();
       try { this.ws.close(4001, "replaced by new connection"); } catch (_) {}
     }
     this.ws = ws;
@@ -618,9 +619,11 @@ const app = express();
 // all full-screen redraws (Claude Code, vim), shrinks several-fold, which is
 // what matters on a weak connection. Small frames (single keystroke echoes)
 // stay uncompressed: below the threshold the CPU is not worth it.
+// WEB_TERMINAL_WS_DEFLATE=0 turns it off.
+const WS_DEFLATE = process.env.WEB_TERMINAL_WS_DEFLATE !== "0";
 expressWs(app, null, {
   wsOptions: {
-    perMessageDeflate: {
+    perMessageDeflate: WS_DEFLATE && {
       threshold: 256,
       zlibDeflateOptions: { level: 4, memLevel: 7 },
       concurrencyLimit: 4,
@@ -1311,7 +1314,7 @@ app.ws("/ws/term", async (ws, req) => {
   const existing = requestedId ? sessions.get(requestedId) : null;
   if (existing && existing.owner === me) {
     session = existing;
-    audit("session_attach", { id: requestedId, ip, me, deflate: !!(ws._extensions && ws._extensions["permessage-deflate"]) });
+    audit("session_attach", { id: requestedId, ip, me, ua: String(req.headers["user-agent"] || "").slice(0, 120), deflate: !!(ws._extensions && ws._extensions["permessage-deflate"]) });
   } else {
     if (existing) audit("session_attach_denied", { id: requestedId, ip, me, owner: existing.owner });
     if (liveForUser >= MAX_SESSIONS_PER_USER) {
@@ -1367,9 +1370,16 @@ app.ws("/ws/term", async (ws, req) => {
   handler = (raw) => { chain = chain.then(() => process1(raw)).catch(() => {}); };
   for (const raw of early) handler(raw);
 
-  ws.on("close", () => {
+  const openedAt = Date.now();
+  ws.on("close", (code, reason) => {
     session.flushInputLine(ip);
-    audit("ws_close", { id: session.id, ip, me });
+    // Who ended it and how: 4001 = another client took the session over;
+    // 1005/1006 = the peer (browser or Cloudflare) dropped it without a reason.
+    audit("ws_close", {
+      id: session.id, ip, me, code, reason: String(reason || "").slice(0, 80),
+      ms: Date.now() - openedAt, replaced: !!ws._wtReplacedAt,
+      ua: String(req.headers["user-agent"] || "").slice(0, 120),
+    });
     session.detach(ws);
   });
 });
