@@ -19,6 +19,7 @@ targets:
     sources: [WebTerminal]
     settings:
       base:
+        # Placeholder: the build scripts pass your WT_BUNDLE_ID from ios/local.env.
         PRODUCT_BUNDLE_IDENTIFIER: com.example.webterminal
         INFOPLIST_FILE: WebTerminal/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2,6"
@@ -28,9 +29,9 @@ targets:
         SUPPORTS_MACCATALYST: YES
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         WT_DISPLAY_NAME: Terminal
-        # Defaults for the server the app opens. Do not edit here: put your own
-        # in ios/local.env (see ios/local.env.example); the build scripts pass
-        # them to xcodebuild. Both can also be changed in the app's Settings.
-        WT_SERVER_URL: "https://terminal.example.com/"
+        # The server the app opens. Not set here: the build scripts ask for it
+        # on the first run, keep it in ios/local.env (git-ignored) and pass it
+        # to xcodebuild. Both can also be changed in the app's Settings.
+        WT_SERVER_URL: ""
         WT_LAN_URL: ""
         "WT_DISPLAY_NAME[sdk=macosx*]": Web Terminal

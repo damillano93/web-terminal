@@ -6,6 +6,9 @@
 #   DEVICE=<udid> bash scripts/ios-build.sh
 #   TEAM=<team id> bash scripts/ios-build.sh
 #
+# The server the app opens and its bundle id are asked on the first run and
+# saved in ios/local.env (see ios/local.env.example).
+#
 # One-time setup, on the Mac itself:
 #   1. Xcode → Settings → Accounts → "+" → Apple ID (a free one works; the app
 #      then expires after 7 days and needs this script run again).
@@ -15,11 +18,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../ios"
 
-# Your own server URLs live in ios/local.env (git-ignored); see ios/local.env.example.
-if [ -f local.env ]; then set -a; . ./local.env; set +a; fi
-URLS=()
-[ -n "${WT_SERVER_URL:-}" ] && URLS+=("WT_SERVER_URL=$WT_SERVER_URL")
-[ -n "${WT_LAN_URL:-}" ] && URLS+=("WT_LAN_URL=$WT_LAN_URL")
+# Server URL and bundle id: asked on the first build, kept in ios/local.env.
+. ../scripts/app-config.sh
 
 if [ -z "${TEAM:-}" ]; then
   # Xcode keeps the teams of the signed-in accounts in its preferences.
@@ -54,8 +54,8 @@ echo "Team $TEAM · device $DEVICE"
 xcodegen generate >/dev/null
 xcodebuild -project WebTerminal.xcodeproj -scheme WebTerminal -configuration Release \
   -destination "id=$DEVICE" -derivedDataPath build \
-  -allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" ${URLS[@]+"${URLS[@]}"} build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
+  -allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" "${SETTINGS[@]}" build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
 
 APP=build/Build/Products/Release-iphoneos/WebTerminal.app
 xcrun devicectl device install app --device "$DEVICE" "$APP"
-xcrun devicectl device process launch --device "$DEVICE" com.example.webterminal || true
+xcrun devicectl device process launch --device "$DEVICE" "$WT_BUNDLE_ID" || true

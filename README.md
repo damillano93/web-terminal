@@ -394,14 +394,11 @@ keyboard accessory bar, a native clipboard for OSC 52, Face ID lock, and
 keyboard shortcuts that reach the terminal instead of the browser.
 
 Both builds need Xcode and [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-(`brew install xcodegen`). First tell them where your server is:
-
-```bash
-cp ios/local.env.example ios/local.env     # then set WT_SERVER_URL (and WT_LAN_URL)
-```
-
-If you fork this for your own devices, also change `bundleIdPrefix` and
-`PRODUCT_BUNDLE_IDENTIFIER` in `ios/project.yml` to an identifier of your own.
+(`brew install xcodegen`). The first time you run either build script it asks
+for your server's URL, an optional home-network URL and a bundle identifier of
+your own, and saves them in `ios/local.env`. That file is git-ignored: nothing
+about your server lives in the repository. To change them later, edit it (see
+[`ios/local.env.example`](ios/local.env.example)).
 
 ### iPhone / iPad
 

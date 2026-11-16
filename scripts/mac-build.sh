@@ -10,19 +10,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/../ios"
 
-# Your own server URLs live in ios/local.env (git-ignored); see ios/local.env.example.
-if [ -f local.env ]; then set -a; . ./local.env; set +a; fi
-URLS=()
-[ -n "${WT_SERVER_URL:-}" ] && URLS+=("WT_SERVER_URL=$WT_SERVER_URL")
-[ -n "${WT_LAN_URL:-}" ] && URLS+=("WT_LAN_URL=$WT_LAN_URL")
+# Server URL and bundle id: asked on the first build, kept in ios/local.env.
+. ../scripts/app-config.sh
 xcodegen generate >/dev/null
 xcodebuild -project WebTerminal.xcodeproj -scheme WebTerminal -configuration Release \
   -destination 'platform=macOS,variant=Mac Catalyst' -derivedDataPath build \
   CODE_SIGN_IDENTITY="-" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
-  ${URLS[@]+"${URLS[@]}"} build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
+  "${SETTINGS[@]}" build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
 pkill -f "Web Terminal.app/Contents/MacOS/WebTerminal" || true
 rm -rf "/Applications/Web Terminal.app"
 cp -R build/Build/Products/Release-maccatalyst/WebTerminal.app "/Applications/Web Terminal.app"
-if [ -n "${SERVER:-}" ]; then defaults write com.example.webterminal server_url "$SERVER"; fi
+if [ -n "${SERVER:-}" ]; then defaults write "$WT_BUNDLE_ID" server_url "$SERVER"; fi
 open "/Applications/Web Terminal.app"
 echo "Installed /Applications/Web Terminal.app"
