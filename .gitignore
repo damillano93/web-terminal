@@ -31,3 +31,7 @@ logs/
 *.bak.*
 .DS_Store
 shell-integration/zsh/.zsh_history
+public/downloads/
+
+# Your own server URLs for the iOS/Mac app builds
+ios/local.env

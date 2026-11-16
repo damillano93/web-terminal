@@ -12,10 +12,10 @@
 	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key><true/>
-	<!-- The web-terminal to open. There is deliberately no in-app URL bar. -->
-	<key>WTServerURL</key><string>https://terminal.example.com/</string>
+	<!-- The web-terminal to open (build setting WT_SERVER_URL: ios/local.env or project.yml). There is deliberately no in-app URL bar. -->
+	<key>WTServerURL</key><string>$(WT_SERVER_URL)</string>
 	<!-- The same server on the home network; used only after it proves its identity (ConnectionManager). -->
-	<key>WTLanURL</key><string>http://192.168.1.10:7681/</string>
+	<key>WTLanURL</key><string>$(WT_LAN_URL)</string>
 	<key>NSLocalNetworkUsageDescription</key><string>Para conectarse directamente al servidor cuando estás en casa, más rápido que por internet.</string>
 	<!-- http to localhost / LAN addresses (server_url = http://127.0.0.1:7681 on the Mac mini). -->
 	<key>NSAppTransportSecurity</key>

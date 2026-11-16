@@ -15,6 +15,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/../ios"
 
+# Your own server URLs live in ios/local.env (git-ignored); see ios/local.env.example.
+if [ -f local.env ]; then set -a; . ./local.env; set +a; fi
+URLS=()
+[ -n "${WT_SERVER_URL:-}" ] && URLS+=("WT_SERVER_URL=$WT_SERVER_URL")
+[ -n "${WT_LAN_URL:-}" ] && URLS+=("WT_LAN_URL=$WT_LAN_URL")
+
 if [ -z "${TEAM:-}" ]; then
   # Xcode keeps the teams of the signed-in accounts in its preferences.
   TEAM=$(defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier 2>/dev/null \
@@ -48,7 +54,7 @@ echo "Team $TEAM · device $DEVICE"
 xcodegen generate >/dev/null
 xcodebuild -project WebTerminal.xcodeproj -scheme WebTerminal -configuration Release \
   -destination "id=$DEVICE" -derivedDataPath build \
-  -allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
+  -allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" ${URLS[@]+"${URLS[@]}"} build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
 
 APP=build/Build/Products/Release-iphoneos/WebTerminal.app
 xcrun devicectl device install app --device "$DEVICE" "$APP"

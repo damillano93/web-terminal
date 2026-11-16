@@ -200,7 +200,7 @@ First packaged, self-hostable release.
 - Security headers set at the origin (`nosniff`, `X-Frame-Options: DENY`,
   `Referrer-Policy`, COOP, and HSTS over HTTPS).
 
-[Unreleased]: https://example.com/compare/v0.2.0...HEAD
-[0.2.0]: https://example.com/releases/tag/v0.2.0
-[0.1.1]: https://example.com/releases/tag/v0.1.1
-[0.1.0]: https://example.com/releases/tag/v0.1.0
+[Unreleased]: https://github.com/damillano93/web-terminal/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.2.0
+[0.1.1]: https://github.com/damillano93/web-terminal/releases/tag/v0.1.1
+[0.1.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.1.0

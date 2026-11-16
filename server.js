@@ -157,7 +157,7 @@ audit("startup", {
 // The shell must NOT inherit the server's own secrets. The process env holds
 // WEB_TERMINAL_SECRET (the cookie-signing key) and the Google client secret;
 // left in, any terminal session could read them with `env` and, with the
-// signing key, forge an auth cookie for any @example.com address — turning one shell
+// signing key, forge an auth cookie for any allowed address — turning one shell
 // into persistent access over the public path. Strip everything WEB_TERMINAL_*
 // (plus the Google creds by any name) from what the PTY sees.
 function sanitizedShellEnv() {

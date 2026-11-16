@@ -1,8 +1,6 @@
 services:
   web-terminal:
     build: .
-    # Or use a published image instead of building:
-    # image: ghcr.io/OWNER/web-terminal:latest
     ports:
       - "7681:7681"
     environment:

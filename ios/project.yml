@@ -28,4 +28,9 @@ targets:
         SUPPORTS_MACCATALYST: YES
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         WT_DISPLAY_NAME: Terminal
+        # Defaults for the server the app opens. Do not edit here: put your own
+        # in ios/local.env (see ios/local.env.example); the build scripts pass
+        # them to xcodebuild. Both can also be changed in the app's Settings.
+        WT_SERVER_URL: "https://terminal.example.com/"
+        WT_LAN_URL: ""
         "WT_DISPLAY_NAME[sdk=macosx*]": Web Terminal
