@@ -3469,7 +3469,7 @@ function toggleMenu() {
     '<div class="meta"><span>Workspace</span><span class="v" title="' + WORKSPACE_ID + '">' + WORKSPACE_ID.slice(0, 8) + '…</span></div>' +
     '<div class="meta"><span>Latencia</span><span class="v">' + latencyLabel() + '</span></div>' +
     '<div class="meta"><span>Renderer</span><span class="v">' + RENDERER + '</span></div>' +
-    (CURRENT_USER ? '<div class="meta"><span>Signed in</span><span class="v" title="' + CURRENT_USER + '">' + CURRENT_USER + '</span></div>' : "") +
+    (CURRENT_USER ? '<div class="meta"><span>Signed in</span><span class="v" title="' + escapeHtml(CURRENT_USER) + '">' + escapeHtml(CURRENT_USER) + '</span></div>' : "") +
     '<div class="sep"></div>' +
     '<button data-act="logout" class="danger">' + icon("logout") + 'Sign out</button>';
   root.appendChild(pop);

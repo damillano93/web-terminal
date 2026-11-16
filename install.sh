@@ -42,6 +42,7 @@ ask_secret() {
     read -r -s -p "$__prompt: " a; echo
     read -r -s -p "Confirm: " b; echo
     [ -n "$a" ] || { warn "Cannot be empty."; continue; }
+    [ "${#a}" -ge "${MINLEN:-1}" ] || { warn "Too short: at least ${MINLEN} characters."; continue; }
     [ "$a" = "$b" ] || { warn "Did not match, try again."; continue; }
     break
   done
@@ -104,7 +105,7 @@ head "2. How should people log in?"
 choose AUTH "Choose" \
   "Password — one shared password (simplest; good behind a VPN/LAN)" \
   "Google OAuth — sign in with Google, restricted to a domain/emails" \
-  "Local-network bypass — no login from private IPs (LAN/Tailscale only)"
+  "Local-network bypass — no login from private IPs (home LAN only; not with Docker)"
 
 # accumulate env lines
 declare -a ENV_LINES
@@ -138,7 +139,7 @@ ok "Generated WEB_TERMINAL_SECRET"
 head "4. Auth details"
 case "$AUTH" in
   1)  # password
-    ask_secret PW "Set the access password"
+    MINLEN=12 ask_secret PW "Set the access password (12+ characters; it guards a shell)"
     add WEB_TERMINAL_PASSWORD "$PW"
     ask WTUSER "Session owner name" "user"
     add WEB_TERMINAL_USER "$WTUSER"
@@ -164,15 +165,16 @@ case "$AUTH" in
     case "$RESTRICT" in
       1) ask DOMAIN "Allowed domain (e.g. example.com)"; add WEB_TERMINAL_ALLOWED_DOMAIN "$DOMAIN" ;;
       2) ask EMAILS "Allowed emails (comma-separated)"; add WEB_TERMINAL_ALLOWED_EMAILS "$EMAILS" ;;
-      3) warn "Any Google account will be able to log in." ;;
+      3) add WEB_TERMINAL_ALLOW_ANY_GOOGLE "1"; warn "Any Google account will be able to log in and get a shell." ;;
     esac
     ;;
   3)  # bypass
+    [ "$DEPLOY" = "1" ] || die "The local-network bypass is not safe in Docker: every client arrives from the bridge's private address, so everyone would be trusted. Choose a password or OAuth."
     add WEB_TERMINAL_LOCAL_BYPASS "1"
     ask WTUSER "Session owner name" "user"
     add WEB_TERMINAL_USER "$WTUSER"
-    warn "Bypass trusts ALL private/Tailscale IPs, not just your devices."
-    warn "On a shared Tailnet, restrict reachability with Tailscale ACLs."
+    warn "Bypass trusts EVERY device on your private network (10.x, 172.16-31.x, 192.168.x), not just yours."
+    warn "Never use it on a machine that also forwards internet traffic to this port."
     ;;
 esac
 

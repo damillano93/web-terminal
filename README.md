@@ -126,25 +126,33 @@ host.
 - **Never** expose it to the internet without authentication and HTTPS.
 - Put it behind a reverse proxy with TLS (Caddy, nginx, Cloudflare Tunnel), or
   only reach it over a private network.
-- Set a strong `WEB_TERMINAL_SECRET` and a strong password, or use Cloudflare
-  Access / Google OAuth.
-- If you enable Google OAuth, **restrict it** with `WEB_TERMINAL_ALLOWED_DOMAIN`
-  or `WEB_TERMINAL_ALLOWED_EMAILS`. With neither set, *any* Google account can
-  log in.
+- Set a strong `WEB_TERMINAL_SECRET` and a password of 12+ characters, or use
+  Cloudflare Access / Google OAuth.
 - The shell is **not sandboxed**. It has the full access of the user that runs
-  the server.
+  the server, including that user's files, so it can read the server's own
+  configuration (`.env`, the launchd plist) and with it the signing secret.
+- **Everyone you let in is the same OS user.** Sessions and workspaces are
+  listed per account, but that is tidiness, not isolation: any allowed user
+  can read and change everything the others can. Only give access to people
+  you would give your own login to.
 
 What the server does on its side:
 
-- Refuses to start without at least one auth method configured.
+- Refuses to start without an auth method, with Google OAuth and no allowlist,
+  or with the local-network bypass inside a container.
+- Issues a login cookie that is signed with its own key, carries how and when
+  you logged in, expires after 7 days, and is re-checked against the current
+  configuration on every request.
 - Checks every WebSocket handshake against an allowed-origin list (blocks
   cross-site WebSocket hijacking).
-- Strips `WEB_TERMINAL_*` and the Google credentials from the environment the
-  shell inherits, so a session cannot read the cookie-signing key.
-- Rate-limits password logins (10 attempts / 15 min per IP).
-- Sends security headers (`nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`,
-  COOP, and HSTS over HTTPS).
-- Caps concurrent terminals per user.
+- Sends a Content-Security-Policy that only runs the app's own scripts, plus
+  `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, COOP, and HSTS over
+  HTTPS.
+- Keeps `WEB_TERMINAL_*` and the Google credentials out of the environment the
+  shell inherits, so they do not show up in `env` or leak into child processes.
+- Rate-limits password logins (10 attempts / 15 min per IPv4 address or IPv6 /64).
+- Caps concurrent terminals per user, and keeps its logs and data files
+  readable by the owner only.
 
 Found a vulnerability? Please open a
 [private security advisory](https://github.com/damillano93/web-terminal/security/advisories/new)
@@ -164,6 +172,7 @@ is the annotated full list; the essentials:
 | `WEB_TERMINAL_MAX_SESSIONS` | Max concurrent terminals per user (default `24`). |
 | `WEB_TERMINAL_LOG_DIR` | Where the audit log (`web-terminal.log`) goes. Default `~/Library/Logs`; on Linux set it, e.g. `/var/log/web-terminal`. |
 | `WEB_TERMINAL_AUDIT_INPUT` | `1` logs the text of typed lines. Off by default: typed lines can be passwords. |
+| `WEB_TERMINAL_CSP` | `0` turns the Content-Security-Policy header off. Leave it on. |
 | `WEB_TERMINAL_UPLOAD_DIR` | Where dropped/pasted images are saved (default `~/.web-terminal/uploads`, deleted after 7 days). |
 
 ## Authentication
@@ -180,9 +189,13 @@ Configure **at least one** method or the server refuses to start.
 ### A. Shared password
 
 ```bash
-export WEB_TERMINAL_PASSWORD='something long and unguessable'
+export WEB_TERMINAL_PASSWORD='something long and unguessable'   # 12+ characters
 export WEB_TERMINAL_USER='me'        # optional: the session owner name
 ```
+
+The password is the only thing between a visitor and a shell, so make it long.
+Behind a reverse proxy, make sure the proxy sends `X-Forwarded-For`; otherwise
+every visitor shares one rate-limit bucket.
 
 ### B. Google OAuth
 
@@ -196,11 +209,14 @@ export WEB_TERMINAL_USER='me'        # optional: the session owner name
 export WEB_TERMINAL_GOOGLE_CLIENT_ID='...'
 export WEB_TERMINAL_GOOGLE_CLIENT_SECRET='...'
 export WEB_TERMINAL_GOOGLE_REDIRECT='https://<your-host>/auth/google/callback'
-# Restrict who gets in (do NOT leave both empty on a public instance):
-export WEB_TERMINAL_ALLOWED_DOMAIN='example.com'
-# or:
+# Who gets in. One of these is required:
 export WEB_TERMINAL_ALLOWED_EMAILS='you@example.com,mate@example.com'
+# or a whole Google Workspace domain:
+export WEB_TERMINAL_ALLOWED_DOMAIN='example.com'
 ```
+
+With neither set the server refuses to start, because any Google account would
+get a shell. (`WEB_TERMINAL_ALLOW_ANY_GOOGLE=1` overrides that; do not.)
 
 ### C. Local-network bypass
 
@@ -208,11 +224,20 @@ export WEB_TERMINAL_ALLOWED_EMAILS='you@example.com,mate@example.com'
 export WEB_TERMINAL_LOCAL_BYPASS=1
 ```
 
-Skips login for requests arriving **directly** (not through a proxy) from
-loopback or RFC1918 ranges. It rejects anything carrying proxy headers, so
-internet traffic through a reverse proxy still has to log in. It trusts the
-**whole** private range, not just your own devices. VPN/overlay ranges such as
-Tailscale's 100.64/10 are deliberately not trusted.
+Skips login for requests arriving **directly** from RFC1918 addresses
+(10.x, 172.16–31.x, 192.168.x) that address the machine by its own IP or
+hostname. Use it together with another method, for a home network only:
+
+- It trusts **every** device on that network, not just yours.
+- A request that carries proxy headers is never trusted, but a proxy that adds
+  none cannot be told apart from a direct connection. For that reason
+  connections from the machine itself (`127.0.0.1`) are **not** trusted unless
+  you also set `WEB_TERMINAL_LOCAL_BYPASS_LOOPBACK=1`. Only do that if nothing
+  on the machine forwards outside traffic to this port (a bare nginx
+  `proxy_pass`, `socat`, `ssh -R`).
+- It is refused inside a container: there every client arrives from the
+  bridge's private address, so everyone would be trusted.
+- VPN/overlay ranges such as Tailscale's 100.64/10 are deliberately not trusted.
 
 ### D. Cloudflare Access
 

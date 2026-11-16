@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- **Login bypass fixed.** The login cookie was signed with the same key as the
+  OAuth state cookies and the signature did not cover the cookie's name, and
+  `/auth/google/callback` handed a signed cookie to anyone, even with OAuth
+  off. Replaying that value as the login cookie was accepted as a logged-in
+  user, so anyone who could reach the server got a shell. The login cookie is
+  now a token of its own (own key, login method, issue time), expires after
+  7 days and is re-checked against the configuration on every request; the
+  OAuth routes answer 404 when OAuth is off. **Update; everyone has to log in
+  again.** If your instance was reachable by people you do not trust, look in
+  the audit log for sessions whose owner is `1` or a 32-character hex string.
+- Local-network bypass: connections from the machine itself are no longer
+  trusted unless `WEB_TERMINAL_LOCAL_BYPASS_LOOPBACK=1` (a forwarder that adds
+  no proxy headers made internet traffic look local); the `Host` header must
+  name the machine (stops DNS rebinding); more proxy headers are recognised;
+  and the bypass is refused inside a container. `install.sh` no longer offers
+  it with Docker.
+- Google OAuth without `WEB_TERMINAL_ALLOWED_EMAILS` / `_DOMAIN` refuses to
+  start instead of accepting any Google account
+  (`WEB_TERMINAL_ALLOW_ANY_GOOGLE=1` to override).
+- Content-Security-Policy header (scripts only from the app, a nonce for the
+  two inline blocks); `WEB_TERMINAL_CSP=0` turns it off.
+- `public/downloads/` needs a login. Logs, `.prefs.json` and
+  `.workspaces.json` are written owner-only (0600).
+- Password login: the rate limit counts an IPv6 /64 as one client and forgets
+  old entries; a warning at startup, and a minimum in `install.sh`, for
+  passwords under 12 characters.
+- Dependencies: express / body-parser / proxy-addr / qs updated (`npm audit`
+  clean); node-pty pinned to an exact version.
+- The Cloudflare Access key refresh on an unknown key id is limited to once a
+  minute.
+
 ### Added
 - Faster on slow or distant links: WebSocket compression (permessage-deflate,
   frames over 256 B), PTY output coalesced for 6 ms into one frame, and a

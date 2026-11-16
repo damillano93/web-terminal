@@ -61,6 +61,35 @@ function isEmailAllowed(email) {
   return domainOk || emailOk || noRestriction;
 }
 
+// Google OAuth with no allowlist would let ANY Google account in, i.e. hand a
+// shell to the whole internet. Refuse to start unless that is asked for by name.
+if (OAUTH_ENABLED && !ALLOWED_DOMAIN && !ALLOWED_EMAILS.length && process.env.WEB_TERMINAL_ALLOW_ANY_GOOGLE !== "1") {
+  console.error(
+    "FATAL: Google OAuth is enabled without an allowlist, so any Google account could log in.\n" +
+    "Set WEB_TERMINAL_ALLOWED_EMAILS (or WEB_TERMINAL_ALLOWED_DOMAIN).\n" +
+    "To really accept every Google account, set WEB_TERMINAL_ALLOW_ANY_GOOGLE=1.",
+  );
+  process.exit(1);
+}
+// The local bypass trusts the peer address. Inside a container every client
+// arrives from the bridge gateway (a private address), so it would trust
+// everyone who can reach the published port.
+if (process.env.WEB_TERMINAL_LOCAL_BYPASS === "1" && fs.existsSync("/.dockerenv") &&
+    process.env.WEB_TERMINAL_LOCAL_BYPASS_IN_CONTAINER !== "1") {
+  console.error(
+    "FATAL: WEB_TERMINAL_LOCAL_BYPASS=1 inside a container trusts every client, because they all\n" +
+    "arrive from the bridge's private address. Use a password or OAuth instead. (If the container\n" +
+    "uses host networking, set WEB_TERMINAL_LOCAL_BYPASS_IN_CONTAINER=1 to allow it.)",
+  );
+  process.exit(1);
+}
+if (PASSWORD_ENABLED && PASSWORD.length < 12) {
+  console.error("WARNING: WEB_TERMINAL_PASSWORD is shorter than 12 characters. It guards a shell; use a long one.");
+}
+if (CF_ACCESS_ENABLED && !ALLOWED_DOMAIN && !ALLOWED_EMAILS.length) {
+  console.error("WARNING: Cloudflare Access is on without WEB_TERMINAL_ALLOWED_EMAILS; the Access policy alone decides who gets in.");
+}
+
 if (!OAUTH_ENABLED && !PASSWORD_ENABLED && !CF_ACCESS_ENABLED && process.env.WEB_TERMINAL_LOCAL_BYPASS !== "1") {
   console.error(
     "FATAL: no auth method configured. Set one of:\n" +
@@ -139,7 +168,10 @@ const LOG_DIR = process.env.WEB_TERMINAL_LOG_DIR || path.join(os.homedir(), "Lib
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const AUDIT_PATH = path.join(LOG_DIR, "web-terminal.log");
 const AUDIT_INPUT_TEXT = process.env.WEB_TERMINAL_AUDIT_INPUT === "1";
-const auditStream = fs.createWriteStream(AUDIT_PATH, { flags: "a" });
+// Logs and the per-instance data files name users, addresses and paths: owner only.
+function ownerOnly(file) { try { fs.chmodSync(file, 0o600); } catch (_) {} }
+const auditStream = fs.createWriteStream(AUDIT_PATH, { flags: "a", mode: 0o600 });
+ownerOnly(AUDIT_PATH);
 function audit(event, fields) {
   const line = JSON.stringify({ ts: new Date().toISOString(), event, ...fields }) + "\n";
   auditStream.write(line);
@@ -219,7 +251,8 @@ class HostClient {
   // server, the host and its shells keep running.
   spawnHost() {
     const logFile = path.join(LOG_DIR, "web-terminal-ptyhost.log");
-    const out = fs.openSync(logFile, "a");
+    const out = fs.openSync(logFile, "a", 0o600);
+    ownerOnly(logFile);
     const child = childProcess.spawn(process.execPath, [path.join(__dirname, "pty-host.js")], {
       detached: true,
       stdio: ["ignore", out, out],
@@ -476,6 +509,7 @@ const sessions = new Map();
 // ---------------------------------------------------------------------------
 const WORKSPACE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKSPACES_FILE = path.join(__dirname, ".workspaces.json");
+ownerOnly(WORKSPACES_FILE);
 const workspaces = new Map(); // id -> { owner, tabs, activeTabId, nextTabId, updatedAt }
 
 try {
@@ -501,7 +535,7 @@ function persistWorkspaces(immediate) {
     if (_wsSaveTimer) { clearTimeout(_wsSaveTimer); _wsSaveTimer = null; }
     const obj = {};
     for (const [id, ws] of workspaces) obj[id] = ws;
-    try { fs.writeFileSync(WORKSPACES_FILE, JSON.stringify(obj)); } catch (_) {}
+    try { fs.writeFileSync(WORKSPACES_FILE, JSON.stringify(obj), { mode: 0o600 }); } catch (_) {}
     return;
   }
   if (_wsSaveTimer) return;
@@ -509,7 +543,7 @@ function persistWorkspaces(immediate) {
     _wsSaveTimer = null;
     const obj = {};
     for (const [id, ws] of workspaces) obj[id] = ws;
-    fs.writeFile(WORKSPACES_FILE, JSON.stringify(obj), () => {});
+    fs.writeFile(WORKSPACES_FILE, JSON.stringify(obj), { mode: 0o600 }, () => {});
   }, 1000);
 }
 
@@ -538,6 +572,7 @@ const VALID_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 // someone's terminal, which is exactly the surprise this feature exists to end.
 // ---------------------------------------------------------------------------
 const PREFS_FILE = path.join(__dirname, ".prefs.json");
+ownerOnly(PREFS_FILE);
 const prefs = new Map(); // email -> { themeId, fontFamily, fontSize, updatedAt }
 
 // bg/fg/variant are paint hints, not settings: the theme catalog lives in the
@@ -573,8 +608,8 @@ function persistPrefs(immediate) {
     const obj = {};
     for (const [email, p] of prefs) obj[email] = p;
     const json = JSON.stringify(obj);
-    if (sync) { try { fs.writeFileSync(PREFS_FILE, json); } catch (_) {} }
-    else fs.writeFile(PREFS_FILE, json, () => {});
+    if (sync) { try { fs.writeFileSync(PREFS_FILE, json, { mode: 0o600 }); } catch (_) {} }
+    else fs.writeFile(PREFS_FILE, json, { mode: 0o600 }, () => {});
   };
   if (immediate) {
     if (_prefsSaveTimer) { clearTimeout(_prefsSaveTimer); _prefsSaveTimer = null; }
@@ -633,6 +668,13 @@ expressWs(app, null, {
   },
 });
 
+const CSP_ENABLED = process.env.WEB_TERMINAL_CSP !== "0";
+// Give the inline <script> blocks of a served page this response's CSP nonce.
+function withNonce(res, html) {
+  const n = res.locals && res.locals.cspNonce;
+  return n ? html.replace(/<script>/g, `<script nonce="${n}">`) : html;
+}
+
 app.disable("x-powered-by");
 app.set("trust proxy", "loopback, 127.0.0.1, ::1");
 
@@ -644,6 +686,31 @@ app.use((req, res, next) => {
   res.set("X-Frame-Options", "DENY");
   res.set("Referrer-Policy", "no-referrer");
   res.set("Cross-Origin-Opener-Policy", "same-origin");
+  // Content-Security-Policy: a script injected into the page would be a shell,
+  // so only our own files and the two inline blocks carrying this response's
+  // nonce may run. Inline styles stay allowed (xterm.js positions with them).
+  // WebSockets are named explicitly because older Safari does not count
+  // ws(s):// as 'self'. WEB_TERMINAL_CSP=0 turns the header off.
+  if (CSP_ENABLED) {
+    const nonce = crypto.randomBytes(16).toString("base64");
+    res.locals.cspNonce = nonce;
+    const host = String(req.headers.host || "");
+    const ws = /^[A-Za-z0-9.\-:[\]]+$/.test(host) ? ` ws://${host} wss://${host}` : "";
+    res.set("Content-Security-Policy", [
+      "default-src 'self'",
+      `script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'`,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      `connect-src 'self'${ws}`,
+      "worker-src 'self' blob:",
+      "manifest-src 'self'",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join("; "));
+  }
   if (isHttps(req)) {
     res.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
@@ -684,7 +751,11 @@ async function verifyCfAccessJwt(token) {
   if (!header || header.alg !== "RS256" || typeof header.kid !== "string") return "bad_alg";
   let keys = await cfAccessKeys(false);
   let key = keys.get(header.kid);
-  if (!key) { keys = await cfAccessKeys(true); key = keys.get(header.kid); }
+  // Unknown kid: Cloudflare may have rotated its keys, so refetch, but at most
+  // once a minute, or made-up kids would make us hammer the certs endpoint.
+  if (!key && Date.now() - cfAccessKeyCache.fetchedAt > 60 * 1000) {
+    keys = await cfAccessKeys(true); key = keys.get(header.kid);
+  }
   if (!key) return "unknown_kid";
   const ok = crypto.verify("RSA-SHA256", Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], "base64url"));
   if (!ok) return "bad_signature";
@@ -744,6 +815,9 @@ app.get("/manifest.webmanifest", (_req, res) => {
 // Static assets are intentionally public: they are the same bundle for everyone
 // and carry nothing user-specific. iOS also fetches the manifest and icons
 // before any session exists, so gating them behind auth just breaks install.
+// Except public/downloads (builds you drop there to share with your own
+// devices): those can embed your server's address, so they need a login.
+app.use("/downloads", (req, res, next) => (isAuthed(req) ? next() : res.status(401).type("text").send("Sign in first")));
 app.use(express.static(PUBLIC_DIR, { index: false, etag: true, maxAge: 0 }));
 
 function isHttps(req) {
@@ -763,47 +837,107 @@ function isHttps(req) {
 // naive "is the socket local?" check would hand the shell to the whole world.
 // Two guards: the peer address is read from the raw socket (never from a
 // header), and any request carrying proxy headers is rejected outright.
-const TRUSTED_PEER = [
-  /^(::ffff:)?127\./,                              // loopback (this Mac)
-  /^::1$/,
+//
+// Those guards only catch proxies that announce themselves. A forwarder on this
+// machine that adds no headers (nginx with a bare proxy_pass, socat, ssh -R)
+// makes internet traffic look like a plain loopback connection, so loopback is
+// NOT trusted unless WEB_TERMINAL_LOCAL_BYPASS_LOOPBACK=1 says nothing of the
+// kind runs here. And the Host header must be an address or name of this
+// machine: that stops DNS rebinding (a web page whose domain resolves to this
+// box) and most forwarders, which pass the public hostname along.
+const LAN_PEER = [
   /^(::ffff:)?10\./,                               // RFC1918
   /^(::ffff:)?192\.168\./,
   /^(::ffff:)?172\.(1[6-9]|2\d|3[01])\./,
 ];
+const LOOPBACK_PEER = [/^(::ffff:)?127\./, /^::1$/];
 const LOCAL_BYPASS = process.env.WEB_TERMINAL_LOCAL_BYPASS === "1";
+const LOCAL_BYPASS_LOOPBACK = LOCAL_BYPASS && process.env.WEB_TERMINAL_LOCAL_BYPASS_LOOPBACK === "1";
 const LOCAL_OWNER = MIGRATION_OWNER;
+if (LOCAL_BYPASS) {
+  console.error(
+    "WARNING: WEB_TERMINAL_LOCAL_BYPASS=1: anyone on this private network gets a shell without logging in" +
+    (LOCAL_BYPASS_LOOPBACK ? ", and so does anything connecting from this machine (loopback)." : "."),
+  );
+}
+
+// The Host header names this machine directly: a private/loopback address or
+// one of its own hostnames. Never the public hostname (that is the proxied path).
+function isLocalHostHeader(req) {
+  let host = String(req.headers.host || "").toLowerCase();
+  if (host.startsWith("[")) host = host.slice(1, host.indexOf("]") < 0 ? undefined : host.indexOf("]"));
+  else host = host.replace(/:\d+$/, "");
+  host = host.replace(/\.$/, "");
+  if (!host) return false;
+  if (host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host)) return true;
+  if (/^10\.\d+\.\d+\.\d+$/.test(host) || /^192\.168\.\d+\.\d+$/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host)) return true;
+  return LOCAL_HOSTS.has(host);
+}
 
 function isTrustedLocal(req) {
   if (!LOCAL_BYPASS) return false;
   // Anything relayed by a proxy is internet traffic: make it log in.
   if (req.headers["x-forwarded-for"] || req.headers["cf-connecting-ip"] ||
-      req.headers["cf-ray"] || req.headers["x-forwarded-proto"]) {
+      req.headers["cf-ray"] || req.headers["x-forwarded-proto"] ||
+      req.headers["x-forwarded-host"] || req.headers["x-real-ip"] ||
+      req.headers["forwarded"] || req.headers["via"]) {
     return false;
   }
+  if (!isLocalHostHeader(req)) return false;
   const peer = (req.socket && req.socket.remoteAddress) || "";
-  return TRUSTED_PEER.some((re) => re.test(peer));
+  if (LAN_PEER.some((re) => re.test(peer))) return true;
+  return LOCAL_BYPASS_LOOPBACK && LOOPBACK_PEER.some((re) => re.test(peer));
+}
+
+// The login cookie: "v1.<payload>.<mac>", payload = {u: user, k: how they
+// logged in, t: when}. Signed with a key of its own, derived from the secret,
+// so no other cookie this server signs (the OAuth state ones) can ever be
+// passed off as a login. Checked on every request: signature, age, and that the
+// identity is still one this configuration would let in.
+const AUTH_COOKIE_KEY = crypto.createHmac("sha256", SECRET).update("wt-auth-cookie-v1").digest();
+function authMac(body) {
+  return crypto.createHmac("sha256", AUTH_COOKIE_KEY).update(body).digest();
+}
+function makeAuthToken(user, kind) {
+  const body = Buffer.from(JSON.stringify({ u: user, k: kind, t: Date.now() })).toString("base64url");
+  return `v1.${body}.${authMac(body).toString("base64url")}`;
+}
+function readAuthToken(raw) {
+  if (typeof raw !== "string" || raw.length > 1024) return null;
+  const parts = raw.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") return null;
+  let given;
+  try { given = Buffer.from(parts[2], "base64url"); } catch (_) { return null; }
+  const want = authMac(parts[1]);
+  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
+  let p;
+  try { p = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")); } catch (_) { return null; }
+  if (!p || typeof p.u !== "string" || typeof p.t !== "number") return null;
+  const age = Date.now() - p.t;
+  if (age < -60 * 1000 || age > COOKIE_MAX_AGE_MS) return null;
+  const user = p.u.toLowerCase();
+  if (!user || user.length > 320) return null;
+  if (p.k === "password") return PASSWORD_ENABLED && user === LOCAL_USER ? user : null;
+  if (p.k === "oauth") return OAUTH_ENABLED && user.includes("@") && isEmailAllowed(user) ? user : null;
+  return null;
 }
 
 function currentUser(req) {
   // Edge-verified identity wins: it was checked against Cloudflare's keys on
   // this very request.
   if (req.cfAccessUser) return req.cfAccessUser;
-  // The cookie is SIGNED, so a present, well-formed value was issued by us —
-  // an OAuth email or the password/bypass user name. (The old check required an
-  // "@", which silently rejected password logins.)
-  const v = req.signedCookies && req.signedCookies[COOKIE_NAME];
-  if (v && typeof v === "string" && v.length > 0 && v.length <= 320) {
-    return v.toLowerCase();
-  }
+  const user = readAuthToken(req.cookies && req.cookies[COOKIE_NAME]);
+  if (user) return user;
   if (isTrustedLocal(req)) return LOCAL_OWNER;
   return null;
 }
 function isAuthed(req) {
   return !!currentUser(req);
 }
-function setAuthCookie(req, res, email) {
-  res.cookie(COOKIE_NAME, email, {
-    signed: true, httpOnly: true, sameSite: "lax", secure: isHttps(req),
+function setAuthCookie(req, res, user, kind) {
+  res.cookie(COOKIE_NAME, makeAuthToken(user, kind), {
+    httpOnly: true, sameSite: "lax", secure: isHttps(req),
     maxAge: COOKIE_MAX_AGE_MS, path: "/",
   });
 }
@@ -837,7 +971,7 @@ function renderLoginHtml() {
 
 app.get("/login", (req, res) => {
   if (isAuthed(req)) return res.redirect("/");
-  res.set("Cache-Control", "no-store").type("html").send(renderLoginHtml());
+  res.set("Cache-Control", "no-store").type("html").send(withNonce(res, renderLoginHtml()));
 });
 
 app.get("/auth/google/start", (req, res) => {
@@ -861,8 +995,12 @@ app.get("/auth/google/start", (req, res) => {
 });
 
 app.get("/auth/google/callback", async (req, res) => {
+  if (!OAUTH_ENABLED) return loginErrorPage(res, 404, "oauth_disabled");
   const state = typeof req.query.state === "string" ? req.query.state : "";
-  const expected = req.signedCookies[OAUTH_STATE_COOKIE];
+  // Only a value shaped like the state we issue (32 hex) counts, so no other
+  // signed cookie can stand in for it.
+  const rawExpected = req.signedCookies[OAUTH_STATE_COOKIE];
+  const expected = typeof rawExpected === "string" && /^[0-9a-f]{32}$/.test(rawExpected) ? rawExpected : "";
   res.clearCookie(OAUTH_STATE_COOKIE, { path: "/auth/google/callback" });
   if (!state || !expected || state !== expected) {
     const retried = req.signedCookies[OAUTH_RETRY_COOKIE] === "1";
@@ -935,13 +1073,13 @@ app.get("/auth/google/callback", async (req, res) => {
       audit("oauth_email_unverified", { email });
       return loginErrorPage(res, 401, "unverified");
     }
-    // Allow if it matches the domain OR is on the email allowlist. If neither is
-    // configured, any verified Google account passes (see the README warning).
+    // Allow if it matches the domain OR is on the email allowlist. With neither
+    // configured the server only starts under WEB_TERMINAL_ALLOW_ANY_GOOGLE=1.
     if (!isEmailAllowed(email)) {
       audit("oauth_denied", { email, domain: email.split("@")[1] || "" });
       return loginErrorPage(res, 403, "domain");
     }
-    setAuthCookie(req, res, email);
+    setAuthCookie(req, res, email, "oauth");
     audit("login_success", { ip: req.ip, email });
     res.redirect("/");
   } catch (e) {
@@ -957,9 +1095,19 @@ if (PASSWORD_ENABLED) {
   const pwParser = express.urlencoded({ extended: false, limit: "1kb" });
   const pwAttempts = new Map();   // ip -> { count, resetAt }
   const PW_MAX = 10, PW_WINDOW_MS = 15 * 60 * 1000;
+  // One bucket per IPv4 address or per IPv6 /64 (a single host owns a whole
+  // /64, so counting full addresses would let it rotate past the limit).
+  const rateKey = (addr) => {
+    const a = String(addr || "unknown").replace(/^::ffff:/, "");
+    return a.includes(":") ? a.split(":").slice(0, 4).join(":") + "::/64" : a;
+  };
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, a] of pwAttempts) if (a.resetAt < now) pwAttempts.delete(k);
+  }, PW_WINDOW_MS).unref();
 
   app.post("/auth/password", pwParser, (req, res) => {
-    const ip = req.ip || "unknown";
+    const ip = rateKey(req.ip);
     const now = Date.now();
     let a = pwAttempts.get(ip);
     if (!a || a.resetAt < now) { a = { count: 0, resetAt: now + PW_WINDOW_MS }; pwAttempts.set(ip, a); }
@@ -977,7 +1125,7 @@ if (PASSWORD_ENABLED) {
       return loginErrorPage(res, 401, "password");
     }
     pwAttempts.delete(ip);
-    setAuthCookie(req, res, LOCAL_USER);
+    setAuthCookie(req, res, LOCAL_USER, "password");
     audit("password_login", { ip, user: LOCAL_USER });
     res.redirect("/");
   });
@@ -1028,7 +1176,7 @@ app.get("/", requireAuth, (req, res) => {
   res
     .set("Cache-Control", "no-store, no-cache, must-revalidate")
     .type("html")
-    .send(renderAppHtml(req));
+    .send(withNonce(res, renderAppHtml(req)));
 });
 
 app.get("/healthz", (_req, res) => res.send("ok"));
