@@ -663,15 +663,32 @@ const KEYBAR_KEY = "wt.keybar.collapsed.v1";
 let keybarCollapsed = false;
 try { keybarCollapsed = localStorage.getItem(KEYBAR_KEY) === "1"; } catch (_) {}
 
+// A physical keyboard on a touch device (an iPad with a Bluetooth keyboard and
+// no trackpad still reports hover:none, so CSS keeps the bar): the bar's keys
+// are all on the real keyboard, so it hides by itself. There is no API for
+// "a keyboard is attached"; the tell is a key press that carries a physical
+// key code (the on-screen keyboard sends none) while the on-screen keyboard is
+// down. The on-screen keyboard coming up again means the real one is gone.
+// Remembered per device so a reload does not flash the bar back in.
+const KEYBAR_HW_KEY = "wt.keybar.hw.v1";
+let hwKeyboard = false;
+// "Show keys" tapped while a physical keyboard is in use: leave them alone
+// until the on-screen keyboard has come and gone.
+let hwOverride = false;
+try { hwKeyboard = localStorage.getItem(KEYBAR_HW_KEY) === "1"; } catch (_) {}
+
+function keybarHidden() { return keybarCollapsed || hwKeyboard; }
+
 function applyKeybarCollapsed() {
   const bar = document.getElementById("keybar");
   if (!bar) return;
-  bar.classList.toggle("collapsed", keybarCollapsed);
+  const hidden = keybarHidden();
+  bar.classList.toggle("collapsed", hidden);
   const h = document.getElementById("keybar-toggle");
   if (h) {
-    h.classList.toggle("on", !keybarCollapsed);
-    h.setAttribute("aria-label", keybarCollapsed ? "Mostrar teclas" : "Ocultar teclas");
-    h.title = keybarCollapsed ? "Mostrar teclas (esc, ctrl, flechas…)" : "Ocultar teclas";
+    h.classList.toggle("on", !hidden);
+    h.setAttribute("aria-label", hidden ? "Mostrar teclas" : "Ocultar teclas");
+    h.title = hidden ? "Mostrar teclas (esc, ctrl, flechas…)" : "Ocultar teclas";
   }
   // The terminal just gained or lost ~76px.
   requestAnimationFrame(() =>
@@ -682,6 +699,37 @@ function setKeybarCollapsed(on) {
   keybarCollapsed = !!on;
   try { localStorage.setItem(KEYBAR_KEY, keybarCollapsed ? "1" : "0"); } catch (_) {}
   applyKeybarCollapsed();
+}
+
+function setHwKeyboard(on) {
+  on = !!on;
+  if (on && hwOverride) return;
+  if (!on) hwOverride = false;
+  if (on === hwKeyboard) return;
+  hwKeyboard = on;
+  try { localStorage.setItem(KEYBAR_HW_KEY, on ? "1" : "0"); } catch (_) {}
+  applyKeybarCollapsed();
+}
+
+// The tab bar's toggle and the palette: show the keys if anything hides them.
+function toggleKeybar() {
+  if (keybarHidden()) {
+    hwOverride = hwKeyboard;
+    hwKeyboard = false;
+    try { localStorage.setItem(KEYBAR_HW_KEY, "0"); } catch (_) {}
+    setKeybarCollapsed(false);
+  } else {
+    setKeybarCollapsed(true);
+  }
+}
+
+function installHwKeyboardWatch() {
+  if (!window.matchMedia("(hover: none)").matches) return;
+  window.addEventListener("keydown", (e) => {
+    if (hwKeyboard || !e.isTrusted || !e.code || e.code === "Unidentified") return;
+    if (document.documentElement.classList.contains("kb-open")) return;
+    setHwKeyboard(true);
+  }, true);
 }
 
 function installKeyBar() {
@@ -732,7 +780,7 @@ function installKeyBar() {
 
   toggle.addEventListener("pointerdown", (e) => {
     e.preventDefault(); e.stopPropagation();
-    setKeybarCollapsed(!keybarCollapsed);
+    toggleKeybar();
   });
   // Blurring the hidden textarea is what actually lowers the iOS keyboard —
   // and with it the AutoFill strip, which is the only way to get that space
@@ -857,6 +905,8 @@ function installViewportFit() {
       // terminal for nothing, so flag the state and let CSS drop it.
       const keyboardUp = window.innerHeight - vv.height > 100;
       document.documentElement.classList.toggle("kb-open", keyboardUp);
+      // The on-screen keyboard is up: no physical one, bring the keys back.
+      if (keyboardUp) setHwKeyboard(false);
       // Safari leaves the page scrolled after the keyboard animates in, which
       // slides the tab bar off the top of the screen for good.
       if (window.scrollY !== 0 || window.scrollX !== 0) window.scrollTo(0, 0);
@@ -1807,6 +1857,15 @@ class Pane {
     // is deliberately no `copy` listener and no navigator.clipboard call.
     try {
       this.term.attachCustomKeyEventHandler((e) => {
+        // Shift+Enter (or Option+Enter) = a line break without submitting.
+        // xterm sends a bare CR for both, the same as Enter, so there was no
+        // way to type a second line. ESC CR is what Claude Code reads as
+        // "newline" and what zsh binds to self-insert-unmeta (inserts a LF).
+        if (e.key === "Enter" && (e.shiftKey || e.altKey) && !e.ctrlKey && !e.metaKey && !e.isComposing) {
+          if (e.type === "keydown") { e.preventDefault(); this.sendInput("\x1b\r"); }
+          return false;
+        }
+
         if (e.type !== "keydown") return true;
 
         // The phone key bar's CTRL/ALT are sticky: they arm here and apply to
@@ -3083,6 +3142,9 @@ function paletteItems(q) {
   act("Abrir sesión existente…", "history", () => openExistingSessionModal());
   act("Apariencia…", "palette", () => openAppearanceModal());
   act(zenMode ? "Salir del modo zen" : "Modo zen", zenMode ? "minimize" : "maximize", () => setZen(!zenMode));
+  if (window.matchMedia("(hover: none)").matches) {
+    act(keybarHidden() ? "Mostrar teclas (esc, ctrl, flechas…)" : "Ocultar teclas", "rows", toggleKeybar);
+  }
   for (const sn of snippets()) {
     items.push({ group: "Comandos", icon: "play", label: sn, snippet: sn, hint: "↵ ejecutar · ⇧↵ escribir",
       run: (insertOnly) => { if (activePane) { activePane.term.paste(sn); if (!insertOnly) activePane.sendInput("\r"); activePane.term.focus(); } } });
@@ -3412,6 +3474,7 @@ function installContextMenu(pane) {
   installServiceWorker();
   installZen();
   installKeyBar();
+  installHwKeyboardWatch();
   installSingleFocusable();
 })();
 

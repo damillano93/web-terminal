@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Shift+Enter (or Option+Enter) types a line break without submitting: it
+  sends ESC CR, which Claude Code reads as a new line and zsh inserts as one.
+- The touch key bar hides by itself when a physical keyboard is in use (an
+  iPad with a Bluetooth keyboard and no trackpad), from the first key pressed
+  on it, and comes back when the on-screen keyboard shows again. "Ocultar /
+  Mostrar teclas" is also in the command palette, reachable in zen mode.
+
 ## [0.3.0] — 2026-11-18
 
 ### Security
