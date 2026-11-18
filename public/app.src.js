@@ -708,6 +708,7 @@ function setHwKeyboard(on) {
   if (on === hwKeyboard) return;
   hwKeyboard = on;
   try { localStorage.setItem(KEYBAR_HW_KEY, on ? "1" : "0"); } catch (_) {}
+  if (!on) setTerminalInputMode(false);
   applyKeybarCollapsed();
 }
 
@@ -723,12 +724,35 @@ function toggleKeybar() {
   }
 }
 
+// With a physical keyboard iPadOS floats a pill over the bottom of the page
+// (language, ‹ ›, dictation). A page cannot remove it, but a field that says
+// it wants no on-screen keyboard (inputmode="none") gets no keyboard UI at
+// all, the pill included. Only ever set after a real physical key press, and
+// lifted the moment a finger touches the page: without a physical keyboard
+// that touch must be able to raise the on-screen one. If the keyboard is
+// still there, the next key press puts it back.
+function setTerminalInputMode(none) {
+  for (const ta of document.querySelectorAll(".xterm-helper-textarea")) {
+    const has = ta.getAttribute("inputmode") === "none";
+    if (none === has) continue;
+    if (none) ta.setAttribute("inputmode", "none"); else ta.removeAttribute("inputmode");
+    // iOS reads inputmode when a field takes focus.
+    if (document.activeElement === ta) { try { ta.blur(); ta.focus({ preventScroll: true }); } catch (_) {} }
+  }
+}
+
 function installHwKeyboardWatch() {
   if (!window.matchMedia("(hover: none)").matches) return;
   window.addEventListener("keydown", (e) => {
-    if (hwKeyboard || !e.isTrusted || !e.code || e.code === "Unidentified") return;
+    if (!e.isTrusted || !e.code || e.code === "Unidentified") return;
     if (document.documentElement.classList.contains("kb-open")) return;
     setHwKeyboard(true);
+    const t = e.target;
+    if (hwKeyboard && t && t.classList && t.classList.contains("xterm-helper-textarea") &&
+        t.getAttribute("inputmode") !== "none") setTerminalInputMode(true);
+  }, true);
+  window.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") setTerminalInputMode(false);
   }, true);
 }
 
@@ -2931,6 +2955,25 @@ function installShortcuts() {
       e.preventDefault(); e.stopPropagation();
       openPalette();
       return;
+    }
+    // Tabs from the keyboard: Ctrl+Shift+←/→ previous / next (wrapping),
+    // Ctrl+Shift+1…8 by position, 9 the last. Ctrl+Shift because a browser
+    // keeps ⌘1…9, ⌘T and Ctrl+Tab for its own tabs and never shows them to
+    // the page. e.code for the digits: with Shift, e.key is "!" or "@".
+    if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && tabs.length) {
+      let target = null;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const i = tabs.findIndex((t) => t.id === activeTabId);
+        target = tabs[(i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+      } else {
+        const m = /^Digit([1-9])$/.exec(e.code || "");
+        if (m) target = m[1] === "9" ? tabs[tabs.length - 1] : tabs[Number(m[1]) - 1];
+      }
+      if (target) {
+        e.preventDefault(); e.stopPropagation();
+        if (target.id !== activeTabId) activateTab(target.id);
+        return;
+      }
     }
     if (!activePane) return;
     const k = e.key.toLowerCase();

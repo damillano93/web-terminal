@@ -399,6 +399,8 @@ types it. Saved commands are stored per account.
 
 | Keys | Action |
 |---|---|
+| Ctrl+Shift+←/→ | Previous / next tab |
+| Ctrl+Shift+1…9 | Tab by position (9: the last) |
 | Cmd/Ctrl+D · Cmd/Ctrl+Shift+D | Split right · split down |
 | Cmd+F (macOS) · Ctrl+Shift+F | Find in scrollback (Enter / Shift+Enter: next / previous, Esc: close) |
 | Cmd/Ctrl+click on a URL | Open it in a new tab |

@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
   iPad with a Bluetooth keyboard and no trackpad), from the first key pressed
   on it, and comes back when the on-screen keyboard shows again. "Ocultar /
   Mostrar teclas" is also in the command palette, reachable in zen mode.
+- With a physical keyboard on an iPad the terminal asks for no on-screen
+  keyboard (`inputmode="none"`), which also removes the system's floating
+  language / dictation pill and gives its strip back to the terminal. A touch
+  lifts it so the on-screen keyboard can still come up.
+- Tabs from the keyboard in any browser: Ctrl+Shift+←/→ for the previous /
+  next tab, Ctrl+Shift+1…9 by position (9 is the last).
 
 ## [0.3.0] — 2026-11-18
 
