@@ -1653,6 +1653,10 @@ class Pane {
     if (want && !this.webgl) {
       try {
         const gl = new XtermAddons.Webgl();
+        try {
+          gl.onAddTextureAtlasCanvas((c) => { _atlasCanvases.add(c); checkAtlasBudget(); });
+          gl.onRemoveTextureAtlasCanvas && gl.onRemoveTextureAtlasCanvas((c) => _atlasCanvases.delete(c));
+        } catch (_) {}
         gl.onContextLoss(() => {
           try { gl.dispose(); } catch (_) {}
           if (this.webgl === gl) { this.webgl = null; this.reloadImageAddon(); }
@@ -3024,6 +3028,38 @@ const LONG_COMMAND_MS = 15000;
 let LAST_RTT = 0;
 const PREDICT_MIN_RTT = 70;        // ms; on the LAN (≈10 ms) the real echo is instant anyway
 const PREDICT_TIMEOUT_MS = 1500;   // no echo by then: stop showing the prediction
+
+// The WebGL renderer caches every (glyph, foreground, background) it draws in
+// a texture atlas shared by all panes, and never evicts: full pages are merged
+// into ever larger ones (up to the GPU's texture limit). Truecolor TUIs that
+// animate colours (Claude Code's spinner, gradients, diffs) mint new entries
+// all day, and the web view grew past 1 GB — several GB under a stress test,
+// until the OS killed it. Clearing the atlas keeps the big pages, so past the
+// budget every pane drops its WebGL renderer (which frees the shared atlas)
+// and gets a fresh one. Costs one redraw.
+const ATLAS_BUDGET_BYTES = 32 * 1024 * 1024;
+const _atlasCanvases = new Set();
+let _atlasRebuildQueued = false;
+function checkAtlasBudget() {
+  if (_atlasRebuildQueued) return;
+  let bytes = 0;
+  for (const c of _atlasCanvases) bytes += c.width * c.height * 4;
+  if (bytes <= ATLAS_BUDGET_BYTES) return;
+  _atlasRebuildQueued = true;
+  setTimeout(() => {
+    _atlasRebuildQueued = false;
+    const live = [];
+    for (const t of tabs) forEachPane(t.layoutRoot, (p) => { if (p.webgl && p.term && !p.disposed) live.push(p); });
+    // All of them first: the atlas is only freed once nobody holds it.
+    for (const p of live) p._syncWebglRenderer(false);
+    _atlasCanvases.clear();
+    for (const p of live) {
+      p._syncWebglRenderer(true);
+      p.reloadImageAddon();
+      try { p.term.refresh(0, p.term.rows - 1); } catch (_) {}
+    }
+  }, 0);
+}
 
 const _charWidthCache = new Map();
 function measureCharWidth(fontFamily, fontSize) {

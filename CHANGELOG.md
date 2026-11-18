@@ -23,6 +23,11 @@ All notable changes to this project are documented here. The format follows
 - Tabs from the keyboard in any browser: Ctrl+Shift+←/→ for the previous /
   next tab, Ctrl+Shift+1…9 by position (9 is the last).
 
+### Fixed
+- Memory: the WebGL glyph atlas grew without limit under truecolor output
+  (Claude Code's animated colours), taking the page past 1 GB. Past a 32 MB
+  atlas every pane now gets a fresh WebGL renderer, which frees it.
+
 ## [0.3.0] — 2026-11-18
 
 ### Security
