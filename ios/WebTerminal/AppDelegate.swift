@@ -77,9 +77,40 @@ enum Preferences {
     /// A fixed server set in Settings (e.g. http://127.0.0.1:7681 on the server
     /// itself). When set, it is always used and no LAN switching happens.
     static var overrideURL: URL? { url(UserDefaults.standard.string(forKey: "server_url")) }
-    static var publicURL: URL {
-        url(Bundle.main.object(forInfoDictionaryKey: "WTServerURL") as? String)
-            ?? URL(string: "https://terminal.example.com/")!
+    /// The server typed into the app on its first launch (or later with
+    /// "Cambiar servidor…"). It is kept for good and wins over the built-in one.
+    static var savedURL: URL? { url(UserDefaults.standard.string(forKey: "public_url")) }
+    private static var builtInURL: URL? { url(Bundle.main.object(forInfoDictionaryKey: "WTServerURL") as? String) }
+    static var publicURL: URL { savedURL ?? builtInURL ?? URL(string: "https://terminal.example.com/")! }
+    /// No server known yet (a release build, first launch): the app asks for it.
+    static var needsSetup: Bool { overrideURL == nil && savedURL == nil && builtInURL == nil }
+
+    /// What the user typed → a server URL. A bare host gets https://, or
+    /// http:// when it is this machine or a home-network address (which is
+    /// all App Transport Security lets through without TLS).
+    static func serverURL(from typed: String) -> URL? {
+        var s = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty, !s.contains(" ") else { return nil }
+        if !s.contains("://") {
+            let host = (s.split(separator: "/").first.map(String.init) ?? s)
+                .split(separator: ":").first.map { $0.lowercased() } ?? ""
+            let isIPv4 = host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." }
+            let local = host == "localhost" || host.hasSuffix(".local") || !host.contains(".") || isIPv4
+            s = (local ? "http://" : "https://") + s
+        }
+        guard var comps = URLComponents(string: s), let host = comps.host, !host.isEmpty,
+              comps.scheme == "https" || comps.scheme == "http" else { return nil }
+        if comps.path.isEmpty { comps.path = "/" }
+        return comps.url
+    }
+
+    /// Keep the server for good. The LAN key belonged to the previous server,
+    /// and a fixed URL from Settings would otherwise keep winning.
+    static func save(server: URL) {
+        let d = UserDefaults.standard
+        d.set(server.absoluteString, forKey: "public_url")
+        d.removeObject(forKey: "server_url")
+        d.removeObject(forKey: "lan_key")
     }
     static var lanEnabled: Bool { UserDefaults.standard.bool(forKey: "lan_auto") }
     static var lanURL: URL? {

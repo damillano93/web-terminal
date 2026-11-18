@@ -75,17 +75,61 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         NotificationCenter.default.addObserver(forName: ConnectionManager.networkChanged, object: nil, queue: .main) { [weak self] _ in
             self?.recheckConnection()
         }
-        let first = WorkspaceStore.workspace(scene: sceneKey, isOnlyWindow: UIApplication.shared.openSessions.count <= 1)
+        workspaceID = WorkspaceStore.workspace(scene: sceneKey, isOnlyWindow: UIApplication.shared.openSessions.count <= 1)
+        // No server yet (first launch of a release build): viewDidAppear asks.
+        if !Preferences.needsSetup { connect() }
+    }
+
+    /// Pick the address (LAN at home, public elsewhere) and open the workspace.
+    private func connect() {
+        let workspace = workspaceID
         Task { @MainActor in
             currentBase = await ConnectionManager.shared.chooseBase()
-            loadWorkspace(first)
+            loadWorkspace(workspace)
         }
+    }
+
+    /// Ask which web-terminal to open. Shown by itself on the first launch
+    /// when the build carries no server; the answer is saved for good
+    /// (Preferences.save) and only asked again from "Cambiar servidor…".
+    private func askServer(typed: String? = nil, invalid: Bool = false) {
+        guard presentedViewController == nil else { return }
+        let first = Preferences.needsSetup
+        let intro = first
+            ? "Escribe la dirección de tu web-terminal. Se guarda en este equipo y no se vuelve a pedir."
+            : "Escribe la dirección del web-terminal al que conectarse."
+        let alert = UIAlertController(title: first ? "¿A qué servidor te conectas?" : "Cambiar servidor",
+                                      message: invalid ? "Esa dirección no es válida. Ejemplo: terminal.example.com" : intro,
+                                      preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "terminal.example.com"
+            field.text = typed ?? (first ? nil : Preferences.publicURL.absoluteString)
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+        }
+        if !first { alert.addAction(UIAlertAction(title: "Cancelar", style: .cancel)) }
+        let ok = UIAlertAction(title: "Conectar", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            let text = alert?.textFields?.first?.text ?? ""
+            guard let url = Preferences.serverURL(from: text) else {
+                // Next turn of the run loop: this alert is still on its way out.
+                return DispatchQueue.main.async { self.askServer(typed: text, invalid: true) }
+            }
+            Preferences.save(server: url)
+            self.connect()
+        }
+        alert.addAction(ok)
+        alert.preferredAction = ok
+        present(alert, animated: true)
     }
 
     /// Back in the app or on a different network: switch between the LAN and
     /// the public address if the right one changed. The page reloads on the same
     /// workspace and reattaches its shells, which live on the server.
     private func recheckConnection() {
+        guard !Preferences.needsSetup else { return }
         Task { @MainActor in
             let base = await ConnectionManager.shared.chooseBase()
             if base != currentBase {
@@ -136,6 +180,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             scene.sizeRestrictions?.minimumSize = CGSize(width: 520, height: 320)
         }
         #endif
+        if Preferences.needsSetup { askServer(); return }
         lock.lockOnLaunchIfNeeded()
         ExpiryWatch.check(from: self)
     }
@@ -331,6 +376,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
             key(UIKeyCommand.inputUpArrow, .command, "Comando anterior", #selector(promptUp)),
             key(UIKeyCommand.inputDownArrow, .command, "Comando siguiente", #selector(promptDown)),
             key("r", [.command, .shift], "Recargar", #selector(reload)),
+            key(",", [.command, .shift], "Cambiar servidor…", #selector(changeServer)),
         ]
         // The Mac has File → New Window (⌘N) already.
         if !mac { cmds.append(key("n", [.command, .shift], "Nueva ventana", #selector(newWindow))) }
@@ -361,6 +407,7 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
     @objc func clear() { run("wt.clear()") }
     @objc func reload() { pageReady = false; webView.reload() }
     @objc func newWindow() { openNewWindow() }
+    @objc func changeServer() { askServer() }
     @objc func palette() { run("wt.palette()") }
     @objc func promptUp() { run("wt.jumpPrompt(-1)") }
     @objc func promptDown() { run("wt.jumpPrompt(1)") }
@@ -424,6 +471,10 @@ final class TerminalViewController: UIViewController, WKNavigationDelegate, WKUI
         alert.addAction(UIAlertAction(title: "Reintentar", style: .default) { [weak self] _ in
             guard let self else { return }
             self.loadWorkspace(self.workspaceID)
+        })
+        // A mistyped server would otherwise leave nothing but "Reintentar".
+        alert.addAction(UIAlertAction(title: "Cambiar servidor…", style: .default) { [weak self] _ in
+            DispatchQueue.main.async { self?.askServer() }
         })
         present(alert, animated: true)
     }

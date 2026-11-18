@@ -443,10 +443,22 @@ The same project builds for the Mac (Mac Catalyst) as **Web Terminal**: its own
 window and Dock icon, a "Terminal" menu, native notifications and several
 windows (⌘N). Signed to run locally, so it does not expire.
 
+**Without building:** download `Web-Terminal-<version>-mac.zip` from the
+[releases page](../../releases/latest), unzip it and move **Web Terminal** to
+Applications. The first time it opens it asks for the address of your
+web-terminal (`terminal.example.com`) and remembers it from then on;
+Terminal → "Cambiar servidor…" (⇧⌘,) changes it. The download is not signed
+with an Apple Developer ID, so macOS blocks the first launch: allow it in
+System Settings → Privacy & Security → "Open Anyway", or run
+`xattr -dr com.apple.quarantine "/Applications/Web Terminal.app"`.
+
+To build it yourself, with your server built in:
+
 ```bash
 bash scripts/mac-build.sh                                  # uses ios/local.env
 SERVER=http://127.0.0.1:7681/ bash scripts/mac-build.sh   # on the server Mac itself
 bash scripts/mac-deploy.sh user@other-mac.local            # copy the built app to another Mac over SSH
+bash scripts/mac-release.sh                                # the zip for a release: no server inside
 ```
 
 The server URL can also be changed in the app's Settings (⌘,).

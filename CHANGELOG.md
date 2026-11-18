@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-18
+
 ### Security
 - **Login bypass fixed.** The login cookie was signed with the same key as the
   OAuth state cookies and the signature did not cover the cookie's name, and
@@ -39,6 +41,12 @@ All notable changes to this project are documented here. The format follows
   minute.
 
 ### Added
+- A ready-made Mac app on the releases page (`scripts/mac-release.sh` builds
+  it): no server inside. On its first launch it asks which web-terminal to
+  open and keeps the answer for good; a bare host gets `https://` (`http://`
+  for this machine or a home-network address). "Cambiar servidor…"
+  (⇧⌘, in the Terminal menu, and on the "could not connect" alert) changes it.
+  Apps built with `ios/local.env` keep opening their built-in server.
 - Faster on slow or distant links: WebSocket compression (permessage-deflate,
   frames over 256 B), PTY output coalesced for 6 ms into one frame, and a
   mosh-style predictive echo at the shell prompt (only between OSC 133 A and
@@ -232,7 +240,8 @@ First packaged, self-hostable release.
 - Security headers set at the origin (`nosniff`, `X-Frame-Options: DENY`,
   `Referrer-Policy`, COOP, and HSTS over HTTPS).
 
-[Unreleased]: https://github.com/damillano93/web-terminal/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/damillano93/web-terminal/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.2.0
 [0.1.1]: https://github.com/damillano93/web-terminal/releases/tag/v0.1.1
 [0.1.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.1.0

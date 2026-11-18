@@ -12,7 +12,7 @@
 	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key><true/>
-	<!-- The web-terminal to open (build setting WT_SERVER_URL: ios/local.env or project.yml). There is deliberately no in-app URL bar. -->
+	<!-- The web-terminal to open (build setting WT_SERVER_URL: ios/local.env). Empty in release builds: the app asks on its first launch and keeps the answer. -->
 	<key>WTServerURL</key><string>$(WT_SERVER_URL)</string>
 	<!-- The same server on the home network; used only after it proves its identity (ConnectionManager). -->
 	<key>WTLanURL</key><string>$(WT_LAN_URL)</string>
