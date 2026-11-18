@@ -3,11 +3,11 @@
 # Build the Mac app for a GitHub release: no server and no personal bundle id
 # inside. The app asks for the server on its first launch and keeps it.
 #
-#   bash scripts/mac-release.sh            # → ios/build/release/Web-Terminal-<version>-mac.zip
+#   bash scripts/mac-release.sh            # → ios/build/release/Web-Terminal-mac.zip
 #
 # It does not read ios/local.env and does not touch /Applications. Signed
 # ad-hoc (no Developer ID), so a downloaded copy has to be let through
-# Gatekeeper once; see the README.
+# Gatekeeper once, or installed with scripts/install-mac-app.sh; see the README.
 set -euo pipefail
 cd "$(dirname "$0")/../ios"
 
@@ -15,7 +15,9 @@ VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' ../package.json | head -1)
 BUNDLE_ID="${RELEASE_BUNDLE_ID:-io.github.webterminal.app}"
 DERIVED=build/release-derived
 OUT=build/release
-ZIP="$OUT/Web-Terminal-$VERSION-mac.zip"
+# One name for every version: scripts/install-mac-app.sh downloads
+# releases/latest/download/Web-Terminal-mac.zip.
+ZIP="$OUT/Web-Terminal-mac.zip"
 
 xcodegen generate >/dev/null
 xcodebuild -project WebTerminal.xcodeproj -scheme WebTerminal -configuration Release \

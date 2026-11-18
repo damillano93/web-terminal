@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `scripts/install-mac-app.sh`: one line in Terminal installs the Mac app from
+  the latest release without the Gatekeeper block a browser download gets.
+  The release asset is now always named `Web-Terminal-mac.zip`.
 - Shift+Enter (or Option+Enter) types a line break without submitting: it
   sends ESC CR, which Claude Code reads as a new line and zsh inserts as one.
 - The touch key bar hides by itself when a physical keyboard is in use (an
