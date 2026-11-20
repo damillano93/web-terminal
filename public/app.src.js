@@ -1226,8 +1226,8 @@ class Pane {
     spacer.className = "spacer";
     bar.appendChild(spacer);
 
-    bar.appendChild(btn("icon:splitRight", "Split right (Cmd/Ctrl+D)", () => splitPane(this, "row")));
-    bar.appendChild(btn("icon:splitDown", "Split down (Cmd/Ctrl+Shift+D)", () => splitPane(this, "col")));
+    bar.appendChild(btn("icon:splitRight", IS_MAC ? "Split right (Cmd+D)" : "Split right (Ctrl+Shift+D)", () => splitPane(this, "row")));
+    bar.appendChild(btn("icon:splitDown", IS_MAC ? "Split down (Cmd+Shift+D)" : "Split down (Ctrl+Shift+E)", () => splitPane(this, "col")));
     const closeBtn = btn("icon:x", "Close pane (tap twice)", () => {
       if (confirmCloseTap(closeBtn)) closePane(this);
     }, "danger");
@@ -2993,12 +2993,15 @@ function installShortcuts() {
       activePane.openSearch();
       return;
     }
-    if (k === "d" && !e.shiftKey && !e.altKey) {
+    // Splits: Cmd+D / Cmd+Shift+D on a Mac, Ctrl+Shift+D / Ctrl+Shift+E
+    // elsewhere. Plain Ctrl+D is EOF and must reach the shell (it used to
+    // split the pane on Linux and Windows, and in a Mac browser).
+    if (e.altKey) return;
+    const splitRight = IS_MAC ? k === "d" && e.metaKey && !e.ctrlKey && !e.shiftKey : k === "d" && e.ctrlKey && e.shiftKey;
+    const splitDown = IS_MAC ? k === "d" && e.metaKey && !e.ctrlKey && e.shiftKey : k === "e" && e.ctrlKey && e.shiftKey;
+    if (splitRight || splitDown) {
       e.preventDefault(); e.stopPropagation();
-      splitPane(activePane, "row");
-    } else if (k === "d" && e.shiftKey && !e.altKey) {
-      e.preventDefault(); e.stopPropagation();
-      splitPane(activePane, "col");
+      splitPane(activePane, splitRight ? "row" : "col");
     }
   }, true);
 }
@@ -3206,11 +3209,11 @@ function paletteItems(q) {
       run: () => activateTab(t.id) });
   }
   const act = (label, ic, run, hint) => items.push({ group: "Acciones", icon: ic, label, run, hint: hint || "" });
-  const mod = IS_MAC ? "⌘" : "Ctrl+";
-  act("Nueva tab", "plus", () => wt.newTab(), mod + "T");
-  act("Dividir a la derecha", "splitRight", () => activePane && splitPane(activePane, "row"), mod + "D");
-  act("Dividir hacia abajo", "splitDown", () => activePane && splitPane(activePane, "col"));
-  act("Buscar en la terminal", "search", () => activePane && activePane.openSearch(), mod + "F");
+  // A browser keeps Ctrl+T for itself; the apps (and a Mac) have their own.
+  act("Nueva tab", "plus", () => wt.newTab(), IS_MAC ? "⌘T" : IS_NATIVE ? "Ctrl+Shift+T" : "");
+  act("Dividir a la derecha", "splitRight", () => activePane && splitPane(activePane, "row"), IS_MAC ? "⌘D" : "Ctrl+Shift+D");
+  act("Dividir hacia abajo", "splitDown", () => activePane && splitPane(activePane, "col"), IS_MAC ? "⇧⌘D" : "Ctrl+Shift+E");
+  act("Buscar en la terminal", "search", () => activePane && activePane.openSearch(), IS_MAC ? "⌘F" : "Ctrl+Shift+F");
   act("Limpiar la terminal", "x", () => { try { activePane.term.clear(); } catch (_) {} });
   act("Renombrar tab", "pencil", () => {
     const t = currentTab();

@@ -1,0 +1,609 @@
+#!/usr/bin/python3
+"""Web Terminal for Linux: a small GTK window around a web-terminal server.
+
+The page does the work; this window only adds what a browser tab cannot: no
+browser chrome, shortcuts that reach the terminal (Ctrl+Shift+T/W/N/C/V),
+native clipboard and image paste, desktop notifications, links in the default
+browser, and the last workspace back on the next launch.
+
+It speaks the same bridge as the iOS/Mac app (ios/): it injects
+window.__WT_NATIVE__, listens on the "wtEvent" and "wtClipboard" message
+handlers and drives the page through window.wt.
+
+  web-terminal                      open (asks for the server the first time)
+  web-terminal --server HOST        set the server and open it
+  web-terminal --change-server      ask for the server again
+  web-terminal --new-window         another window, its own workspace
+
+WEB_TERMINAL_DEBUG=1 enables the web inspector (right click → Inspect) and
+prints the page's console.
+"""
+import base64
+import json
+import os
+import sys
+import urllib.parse
+
+# WebKitGTK ≥ 2.42 draws through DMA-BUF, which leaves a blank window on the
+# NVIDIA proprietary driver. Must be set before WebKit loads.
+if os.path.exists("/proc/driver/nvidia/version"):
+    os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+try:
+    gi.require_version("WebKit2", "4.1")
+except ValueError:
+    gi.require_version("WebKit2", "4.0")
+from gi.repository import Gdk, Gio, GLib, Gtk, WebKit2  # noqa: E402
+
+# WM_CLASS "web-terminal": how the panel matches windows to the launcher.
+GLib.set_prgname("web-terminal")
+Gdk.set_program_class("web-terminal")
+
+APP_ID = "io.github.webterminal.App"
+VERSION = "@VERSION@"
+TITLE = "Web Terminal"
+BACKGROUND = "#0d1117"
+DEBUG = os.environ.get("WEB_TERMINAL_DEBUG") == "1"
+
+CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "web-terminal")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+DATA_DIR = os.path.join(GLib.get_user_data_dir(), "web-terminal")
+CACHE_DIR = os.path.join(GLib.get_user_cache_dir(), "web-terminal")
+
+# The web process is told it is under memory pressure from a third of this
+# (drops caches) and harder from half (also collects garbage). Nothing is
+# killed. A terminal page normally sits well under the first mark.
+MEMORY_LIMIT_MB = 1024
+
+USAGE = """Usage:
+  web-terminal                      open (asks for the server the first time)
+  web-terminal --server HOST        set the server and open it
+  web-terminal --change-server      ask for the server again
+  web-terminal --new-window         another window, its own workspace
+"""
+
+IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+               "gif": "image/gif", "webp": "image/webp"}
+
+
+# --- settings ----------------------------------------------------------------
+
+def load_config():
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            c = json.load(f)
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(c):
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(c, f, indent=2)
+    os.replace(tmp, CONFIG_FILE)
+
+
+def server_url_from(typed):
+    """What the user typed → a server URL. A bare host gets https://, or
+    http:// when it is this machine or a home-network address."""
+    s = (typed or "").strip()
+    if not s or " " in s:
+        return None
+    if "://" not in s:
+        host = s.split("/")[0].split(":")[0].lower()
+        parts = host.split(".")
+        is_ipv4 = len(parts) == 4 and all(p.isdigit() for p in parts)
+        local = host == "localhost" or host.endswith(".local") or "." not in host or is_ipv4
+        s = ("http://" if local else "https://") + s
+    u = urllib.parse.urlsplit(s)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        return None
+    return urllib.parse.urlunsplit((u.scheme, u.netloc, u.path or "/", u.query, ""))
+
+
+def host_of(uri):
+    try:
+        return (urllib.parse.urlsplit(uri or "").hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def js_string(s):
+    return json.dumps(s)
+
+
+def open_external(uri, parent=None):
+    if not uri or urllib.parse.urlsplit(uri).scheme.lower() not in ("http", "https"):
+        return
+    try:
+        Gtk.show_uri_on_window(parent, uri, Gdk.CURRENT_TIME)
+    except GLib.Error:
+        try:
+            Gio.AppInfo.launch_default_for_uri(uri, None)
+        except GLib.Error as e:
+            print("web-terminal: cannot open %s: %s" % (uri, e.message), file=sys.stderr)
+
+
+# --- one web engine for every window ------------------------------------------
+
+class Engine:
+    def __init__(self):
+        for d in (DATA_DIR, CACHE_DIR):
+            os.makedirs(d, mode=0o700, exist_ok=True)
+        data = WebKit2.WebsiteDataManager(base_data_directory=DATA_DIR, base_cache_directory=CACHE_DIR)
+        self.context = None
+        mps = self._memory_pressure()
+        if mps is not None:
+            try:
+                self.context = WebKit2.WebContext(website_data_manager=data, memory_pressure_settings=mps)
+            except TypeError:
+                self.context = None
+        if self.context is None:
+            self.context = WebKit2.WebContext(website_data_manager=data)
+        # No back/forward or resource caches worth keeping: one page, long-lived.
+        self.context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        # Cookies (the server's login, Cloudflare Access) survive a restart.
+        data.get_cookie_manager().set_persistent_storage(
+            os.path.join(DATA_DIR, "cookies.sqlite"), WebKit2.CookiePersistentStorage.SQLITE)
+
+        s = WebKit2.Settings()
+        s.set_enable_webgl(True)                       # the terminal's GPU renderer
+        s.set_javascript_can_access_clipboard(True)    # Ctrl+Shift+C in the page
+        s.set_javascript_can_open_windows_automatically(False)
+        s.set_enable_page_cache(False)
+        s.set_enable_developer_extras(DEBUG)
+        s.set_enable_write_console_messages_to_stdout(DEBUG)
+        for name in ("set_enable_back_forward_navigation_gestures", "set_enable_media"):
+            if hasattr(s, name):
+                getattr(s, name)(False)
+        self.settings = s
+
+    @staticmethod
+    def _memory_pressure():
+        try:
+            m = WebKit2.MemoryPressureSettings.new()
+            m.set_memory_limit(MEMORY_LIMIT_MB)
+            return m
+        except (AttributeError, TypeError):
+            return None   # WebKitGTK < 2.34
+
+
+# --- a window -----------------------------------------------------------------
+
+class TerminalWindow(Gtk.ApplicationWindow):
+    def __init__(self, app, workspace=None):
+        super().__init__(application=app, title=TITLE)
+        self.app = app
+        self.workspace = workspace
+        self.selection = ""
+        self.page_ready = False
+        self.pending = []
+        self.error_dialog = None
+        self.zoom = float(app.config.get("zoom") or 1.0)
+
+        w, h = app.config.get("size") or (1100, 700)
+        self.set_default_size(int(w), int(h))
+        if app.config.get("maximized"):
+            self.maximize()
+
+        ucm = WebKit2.UserContentManager()
+        ucm.add_script(WebKit2.UserScript.new(
+            "window.__WT_NATIVE__ = { platform: 'linux', version: 3 };",
+            WebKit2.UserContentInjectedFrames.TOP_FRAME,
+            WebKit2.UserScriptInjectionTime.START, None, None))
+        for name in ("wtEvent", "wtClipboard"):
+            ucm.connect("script-message-received::" + name, self.on_message, name)
+            ucm.register_script_message_handler(name)
+
+        self.view = WebKit2.WebView(web_context=app.engine.context, user_content_manager=ucm,
+                                    settings=app.engine.settings)
+        bg = Gdk.RGBA()
+        bg.parse(BACKGROUND)
+        self.view.set_background_color(bg)
+        self.view.set_zoom_level(self.zoom)
+        self.view.connect("decide-policy", self.on_decide_policy)
+        self.view.connect("load-changed", self.on_load_changed)
+        self.view.connect("load-failed", self.on_load_failed)
+        self.view.connect("web-process-terminated", self.on_web_process_terminated)
+        self.view.connect("notify::title", self.on_title)
+        if not DEBUG:
+            # The page has its own menu; WebKit's (Back, Reload…) means nothing here.
+            self.view.connect("context-menu", lambda *a: True)
+        self.add(self.view)
+
+        self.connect("key-press-event", self.on_key)
+        self.connect("focus-in-event", lambda *a: self.set_urgency_hint(False))
+        self.connect("delete-event", self.on_delete)
+        self.show_all()
+
+    # -- loading
+
+    def load(self):
+        base = self.app.server
+        if not base:
+            return
+        url = base
+        if self.workspace:
+            sep = "&" if urllib.parse.urlsplit(base).query else "?"
+            url = base + sep + "w=" + urllib.parse.quote(self.workspace, safe="")
+        self.page_ready = False
+        self.view.load_uri(url)
+
+    def is_internal(self, uri):
+        host = host_of(uri)
+        if not host:
+            return True   # about:blank, blob:, data:
+        return host == host_of(self.app.server) or host.endswith(".cloudflareaccess.com")
+
+    def on_decide_policy(self, view, decision, kind):
+        T = WebKit2.PolicyDecisionType
+        if kind not in (T.NAVIGATION_ACTION, T.NEW_WINDOW_ACTION):
+            return False
+        action = decision.get_navigation_action()
+        uri = action.get_request().get_uri()
+        if kind == T.NEW_WINDOW_ACTION:
+            # window.open: links go to the browser; the page's "New window"
+            # (a bare "/") opens another window here.
+            decision.ignore()
+            if not self.is_internal(uri):
+                open_external(uri, self)
+            elif "w" in urllib.parse.parse_qs(urllib.parse.urlsplit(uri).query):
+                view.load_uri(uri)
+            else:
+                self.app.new_window()
+            return True
+        # A link clicked on the terminal that leads elsewhere opens in the
+        # browser. Redirects and the login pages (Google, Access) stay here.
+        if (action.get_navigation_type() == WebKit2.NavigationType.LINK_CLICKED
+                and self.is_internal(view.get_uri()) and not self.is_internal(uri)):
+            decision.ignore()
+            open_external(uri, self)
+            return True
+        return False
+
+    def on_load_changed(self, view, event):
+        if event == WebKit2.LoadEvent.STARTED:
+            self.page_ready = False
+
+    def on_load_failed(self, view, event, uri, error):
+        if error.matches(WebKit2.network_error_quark(), int(WebKit2.NetworkError.CANCELLED)) or \
+           error.matches(WebKit2.policy_error_quark(), int(WebKit2.PolicyError.FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE)):
+            return False
+        self.show_error(error.message)
+        return True
+
+    def on_web_process_terminated(self, view, reason):
+        self.page_ready = False
+        view.reload()
+
+    def on_title(self, view, _pspec):
+        t = view.get_title()
+        self.set_title(t if t else TITLE)
+
+    def show_error(self, message):
+        if self.error_dialog:
+            return
+        d = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
+                              buttons=Gtk.ButtonsType.NONE, text="No se pudo conectar")
+        d.format_secondary_text("%s\n\n%s" % (self.app.server, message))
+        d.add_button("Cambiar servidor…", 1)
+        d.add_button("Reintentar", 2)
+        d.set_default_response(2)
+        self.error_dialog = d
+
+        def done(dlg, resp):
+            dlg.destroy()
+            self.error_dialog = None
+            if resp == 1:
+                self.app.ask_server(self)
+            elif resp == 2:
+                self.load()
+        d.connect("response", done)
+        d.show()
+
+    # -- talking to the page
+
+    def run(self, js):
+        """Run JS against window.wt, queued until the page has booted."""
+        if not self.page_ready:
+            self.pending.append(js)
+            return
+        code = "window.wt && (%s)" % js
+        if hasattr(self.view, "evaluate_javascript"):
+            self.view.evaluate_javascript(code, -1, None, None, None, None)
+        else:
+            self.view.run_javascript(code, None, None)
+
+    def on_message(self, _ucm, result, name):
+        try:
+            value = result.get_js_value() if hasattr(result, "get_js_value") else result
+            body = json.loads(value.to_json(0))
+        except (ValueError, TypeError, AttributeError, GLib.Error):
+            return
+        if name == "wtClipboard":
+            if isinstance(body, str):
+                set_clipboard(body)
+            return
+        if not isinstance(body, dict):
+            return
+        kind = body.get("type")
+        if kind == "workspace":
+            wid = body.get("id")
+            if isinstance(wid, str) and wid:
+                self.workspace = wid
+                if self is self.app.main_window():
+                    self.app.remember("workspace", wid)
+            self.page_ready = True
+            queued, self.pending = self.pending, []
+            for js in queued:
+                self.run(js)
+        elif kind == "selection":
+            self.selection = str(body.get("text") or "")
+            if self.selection:
+                # Select to copy, middle click to paste, as in any Linux terminal.
+                Gtk.Clipboard.get(Gdk.SELECTION_PRIMARY).set_text(self.selection, -1)
+        elif kind == "copy":
+            text = body.get("text")
+            if isinstance(text, str):
+                set_clipboard(text)
+        elif kind == "paste":
+            self.paste(want_image=bool(body.get("image")))
+        elif kind == "open":
+            open_external(str(body.get("url") or ""), self)
+        elif kind == "notify":
+            self.app.notify(str(body.get("title") or "Terminal"), str(body.get("body") or ""),
+                            body.get("tabId"), self.workspace)
+        elif kind == "bell":
+            if not self.is_active():
+                self.set_urgency_hint(True)
+
+    def focus_tab(self, tab_id):
+        self.present()
+        self.run("wt.switchTabId(%d)" % int(tab_id))
+
+    # -- clipboard
+
+    def copy_selection(self):
+        if not self.selection:
+            return False
+        set_clipboard(self.selection)
+        self.run("wt.copied(%d)" % len(self.selection))
+        return True
+
+    def paste(self, want_image=False):
+        """Image files copied in the file manager, or a copied image, are
+        uploaded and their paths typed; anything else is pasted as text."""
+        cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        uris = cb.wait_for_uris() or []
+        files = [u for u in uris if u.startswith("file://")]
+        images = [f for f in files if os.path.splitext(f)[1].lower().lstrip(".") in IMAGE_TYPES]
+        if images:
+            for uri in images:
+                try:
+                    path = GLib.filename_from_uri(uri)[0]
+                    with open(path, "rb") as f:
+                        data = f.read()
+                except (OSError, GLib.Error):
+                    continue
+                mime = IMAGE_TYPES[os.path.splitext(path)[1].lower().lstrip(".")]
+                self.paste_image_bytes(data, mime)
+            return
+        text = cb.wait_for_text() or ""
+        stripped = text.strip()
+        only_url = not stripped or urllib.parse.urlsplit(stripped).scheme in ("http", "https", "file", "data")
+        if (want_image or only_url) and cb.wait_is_image_available():
+            pixbuf = cb.wait_for_image()
+            if pixbuf is not None:
+                ok, data = pixbuf.save_to_bufferv("png", [], [])
+                if ok:
+                    self.paste_image_bytes(data, "image/png")
+                    return
+        if files and not stripped:
+            text = " ".join(GLib.shell_quote(GLib.filename_from_uri(u)[0]) for u in files)
+        if text:
+            self.run("wt.pasteText(%s)" % js_string(text))
+
+    def paste_image_bytes(self, data, mime):
+        b64 = base64.b64encode(bytes(data)).decode("ascii")
+        self.run("wt.pasteImage(%s, %s)" % (js_string(b64), js_string(mime)))
+
+    # -- keys
+
+    def on_key(self, _w, ev):
+        state = ev.state & Gtk.accelerator_get_default_mod_mask()
+        key = Gdk.keyval_to_lower(ev.keyval)
+        if ev.keyval == Gdk.KEY_F11 and not state:
+            self.toggle_fullscreen()
+            return True
+        ctrl_shift = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        if state != ctrl_shift:
+            return False
+        if key == Gdk.KEY_t:
+            self.run("wt.newTab()")
+        elif key == Gdk.KEY_w:
+            self.run("wt.closeTab()")
+        elif key == Gdk.KEY_n:
+            self.app.new_window()
+        elif key == Gdk.KEY_c:
+            return self.copy_selection()
+        elif key == Gdk.KEY_v:
+            self.paste()
+        elif key in (Gdk.KEY_plus, Gdk.KEY_equal):
+            self.set_zoom(self.zoom + 0.1)
+        elif key in (Gdk.KEY_underscore, Gdk.KEY_minus):
+            self.set_zoom(self.zoom - 0.1)
+        elif key in (Gdk.KEY_parenright, Gdk.KEY_0):
+            self.set_zoom(1.0)
+        elif key in (Gdk.KEY_less, Gdk.KEY_comma):
+            self.app.ask_server(self)
+        else:
+            return False
+        return True
+
+    def set_zoom(self, z):
+        self.zoom = round(max(0.5, min(3.0, z)), 2)
+        self.view.set_zoom_level(self.zoom)
+        self.app.remember("zoom", self.zoom)
+
+    def toggle_fullscreen(self):
+        win = self.get_window()
+        if win and win.get_state() & Gdk.WindowState.FULLSCREEN:
+            self.unfullscreen()
+        else:
+            self.fullscreen()
+
+    def on_delete(self, *_):
+        if self is self.app.main_window():
+            maximized = self.is_maximized()
+            c = self.app.config
+            c["maximized"] = maximized
+            if not maximized:
+                c["size"] = list(self.get_size())
+            save_config(c)
+        return False
+
+
+def set_clipboard(text):
+    cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+    cb.set_text(text, -1)
+    cb.store()
+
+
+# --- the application ----------------------------------------------------------
+
+class App(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.config = {}
+        self.engine = None
+        self.server = None
+        self.windows_ = []
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        GLib.set_application_name(TITLE)
+        Gtk.Window.set_default_icon_name(APP_ID)
+        self.config = load_config()
+        self.server = server_url_from(self.config.get("server") or "")
+        self.engine = Engine()
+        act = Gio.SimpleAction.new("focus-tab", GLib.VariantType.new("(si)"))
+        act.connect("activate", self.on_focus_tab)
+        self.add_action(act)
+
+    def do_command_line(self, cl):
+        args = cl.get_arguments()[1:]
+        if "--server" in args:
+            i = args.index("--server")
+            url = server_url_from(args[i + 1] if i + 1 < len(args) else "")
+            if not url:
+                cl.printerr_literal("web-terminal: --server needs an address, e.g. terminal.example.com\n")
+                return 2
+            self.set_server(url)
+        win = self.main_window()
+        if "--new-window" in args and win is not None:
+            self.new_window()
+        elif win is not None:
+            win.present()
+        else:
+            win = self.new_window(self.config.get("workspace"))
+        if "--change-server" in args or not self.server:
+            self.ask_server(win)
+        return 0
+
+    def main_window(self):
+        self.windows_ = [w for w in self.windows_ if w.get_application() is self]
+        return self.windows_[0] if self.windows_ else None
+
+    def new_window(self, workspace=None):
+        w = TerminalWindow(self, workspace)
+        self.windows_.append(w)
+        w.load()
+        w.present()
+        return w
+
+    def remember(self, key, value):
+        if self.config.get(key) != value:
+            self.config[key] = value
+            save_config(self.config)
+
+    def set_server(self, url):
+        if url != self.server:
+            self.server = url
+            self.config["server"] = url
+            self.config.pop("workspace", None)   # it belonged to the old server
+            save_config(self.config)
+            for w in list(self.windows_):
+                w.workspace = None
+
+    def ask_server(self, parent):
+        first = not self.server
+        d = Gtk.Dialog(title="¿A qué servidor te conectas?" if first else "Cambiar servidor",
+                       transient_for=parent, modal=True)
+        if not first:
+            d.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        d.add_button("Conectar", Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.OK)
+        box = d.get_content_area()
+        box.set_spacing(10)
+        box.set_border_width(14)
+        label = Gtk.Label(xalign=0)
+        label.set_line_wrap(True)
+        label.set_max_width_chars(48)
+        intro = ("Escribe la dirección de tu web-terminal. Se guarda en este equipo y no se vuelve a pedir."
+                 if first else "Escribe la dirección del web-terminal al que conectarse.")
+        label.set_text(intro)
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("terminal.example.com")
+        entry.set_activates_default(True)
+        entry.set_input_purpose(Gtk.InputPurpose.URL)
+        if not first:
+            entry.set_text(self.server)
+        box.add(label)
+        box.add(entry)
+        d.show_all()
+
+        def done(dlg, resp):
+            if resp != Gtk.ResponseType.OK:
+                dlg.destroy()
+                if first:
+                    self.quit()
+                return
+            url = server_url_from(entry.get_text())
+            if not url:
+                label.set_markup("<b>Esa dirección no es válida.</b> Ejemplo: terminal.example.com")
+                return
+            dlg.destroy()
+            self.set_server(url)
+            for w in self.windows_:
+                w.load()
+        d.connect("response", done)
+        d.present()
+
+    def notify(self, title, body, tab_id, workspace):
+        n = Gio.Notification.new(title)
+        if body:
+            n.set_body(body)
+        if isinstance(tab_id, int):
+            n.set_default_action(Gio.Action.print_detailed_name(
+                "app.focus-tab", GLib.Variant("(si)", (workspace or "", tab_id))))
+        self.send_notification(None, n)
+
+    def on_focus_tab(self, _action, param):
+        workspace, tab_id = param.unpack()
+        target = next((w for w in self.windows_ if w.workspace == workspace), None) or self.main_window()
+        if target:
+            target.focus_tab(tab_id)
+
+
+if __name__ == "__main__":
+    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
+        sys.exit(print(USAGE, end=""))
+    if "--version" in sys.argv[1:]:
+        sys.exit(print("web-terminal", VERSION))
+    sys.exit(App().run(sys.argv))

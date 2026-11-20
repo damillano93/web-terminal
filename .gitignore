@@ -35,3 +35,4 @@ public/downloads/
 
 # Your own server URLs for the iOS/Mac app builds
 ios/local.env
+linux/build/

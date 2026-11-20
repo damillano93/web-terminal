@@ -22,8 +22,18 @@ All notable changes to this project are documented here. The format follows
   lifts it so the on-screen keyboard can still come up.
 - Tabs from the keyboard in any browser: Ctrl+Shift+←/→ for the previous /
   next tab, Ctrl+Shift+1…9 by position (9 is the last).
+- Linux app (`linux/`, `scripts/linux-deb.sh`): a GTK + WebKitGTK window
+  packaged as a `.deb` for Linux Mint, Ubuntu and Debian. Same bridge as the
+  Mac app: native clipboard and image paste, notifications, links in the
+  browser, the last workspace on relaunch, Ctrl+Shift+T/W/N/C/V.
+
+### Changed
+- Split shortcuts outside a Mac are Ctrl+Shift+D (right) and Ctrl+Shift+E
+  (down). The palette now shows the real shortcuts on each platform.
 
 ### Fixed
+- Ctrl+D reaches the shell again (EOF, closing it) on Linux and Windows and in
+  a Mac browser: it used to split the pane instead.
 - Memory: the WebGL glyph atlas grew without limit under truecolor output
   (Claude Code's animated colours), taking the page past 1 GB. Past a 32 MB
   atlas every pane now gets a fresh WebGL renderer, which frees it.

@@ -31,6 +31,7 @@ system of its own, nothing to host besides one Node process.
 - [Running as a service](#running-as-a-service)
 - [How it works](#how-it-works)
 - [Using it](#using-it)
+- [Linux app (optional)](#linux-app-optional)
 - [iOS and Mac apps (optional)](#ios-and-mac-apps-optional)
 - [Development](#development)
 - [License](#license)
@@ -401,7 +402,7 @@ types it. Saved commands are stored per account.
 |---|---|
 | Ctrl+Shift+←/→ | Previous / next tab |
 | Ctrl+Shift+1…9 | Tab by position (9: the last) |
-| Cmd/Ctrl+D · Cmd/Ctrl+Shift+D | Split right · split down |
+| Cmd+D · Cmd+Shift+D (Mac), Ctrl+Shift+D · Ctrl+Shift+E (elsewhere) | Split right · split down |
 | Cmd+F (macOS) · Ctrl+Shift+F | Find in scrollback (Enter / Shift+Enter: next / previous, Esc: close) |
 | Cmd/Ctrl+click on a URL | Open it in a new tab |
 | Cmd+C (macOS) · Ctrl+Shift+C | Copy the selection |
@@ -412,6 +413,40 @@ types it. Saved commands are stored per account.
 
 Apps inside the shell can also copy to your clipboard with OSC 52 (vim's
 `"+y` with OSC 52 enabled, tmux `set -g set-clipboard on`, Claude Code).
+
+## Linux app (optional)
+
+`linux/` is a small desktop app for Linux Mint, Ubuntu and Debian: your
+web-terminal in its own window (GTK + WebKitGTK, one Python script, no
+Electron). It adds what a browser tab cannot: shortcuts that reach the
+terminal, native clipboard and image paste, select-to-copy with middle-click
+paste, desktop notifications, links in your default browser, and the last
+workspace back on the next launch.
+
+```bash
+bash scripts/linux-deb.sh                          # → linux/build/web-terminal_<version>_all.deb
+sudo apt install ./web-terminal_<version>_all.deb  # on the Linux machine; pulls in GTK and WebKitGTK
+```
+
+The package is architecture-independent (amd64 and arm64) and builds on a Mac
+too. The first launch asks for the server's address and remembers it; launch
+it with `--change-server` (or the menu entry's right-click action) to change
+it, or `--server terminal.example.com` to set it from a script.
+
+| Keys | Action |
+|---|---|
+| Ctrl+Shift+T · Ctrl+Shift+W | New tab · close tab |
+| Ctrl+Shift+N | New window (its own workspace) |
+| Ctrl+Shift+C · Ctrl+Shift+V | Copy · paste (an image or image files: upload them) |
+| Ctrl+Shift+= · Ctrl+Shift+- · Ctrl+Shift+0 | Zoom in · out · reset |
+| Ctrl+Shift+, | Change server |
+| F11 | Full screen |
+
+Settings live in `~/.config/web-terminal/config.json`, cookies and site data in
+`~/.local/share/web-terminal`. `WEB_TERMINAL_DEBUG=1 web-terminal` turns on the
+web inspector (right click → Inspect Element) and prints the page's console.
+On the NVIDIA proprietary driver the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+by itself, which avoids WebKitGTK's blank window there.
 
 ## iOS and Mac apps (optional)
 

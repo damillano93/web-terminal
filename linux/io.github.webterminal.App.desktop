@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Web Terminal
+GenericName=Terminal
+Comment=Your web-terminal server in its own window
+Exec=web-terminal
+Icon=io.github.webterminal.App
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;terminal;ssh;remote;
+StartupNotify=true
+StartupWMClass=web-terminal
+Actions=new-window;change-server;
+
+[Desktop Action new-window]
+Name=Nueva ventana
+Exec=web-terminal --new-window
+
+[Desktop Action change-server]
+Name=Cambiar servidor…
+Exec=web-terminal --change-server
