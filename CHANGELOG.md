@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-20
+
 ### Added
 - `scripts/install-mac-app.sh`: one line in Terminal installs the Mac app from
   the latest release without the Gatekeeper block a browser download gets.
@@ -37,6 +39,11 @@ All notable changes to this project are documented here. The format follows
 - Memory: the WebGL glyph atlas grew without limit under truecolor output
   (Claude Code's animated colours), taking the page past 1 GB. Past a 32 MB
   atlas every pane now gets a fresh WebGL renderer, which frees it.
+- Notifications (a long command finished, Claude Code asking for attention via
+  OSC 9 / OSC 777) now also fire when the tab is the active one but its window
+  is behind another app. WebKitGTK keeps `document.hidden` false there, so the
+  Linux app (and a browser window) showed nothing. The iOS/Mac app is
+  unchanged.
 
 ## [0.3.0] — 2026-11-18
 
@@ -272,7 +279,8 @@ First packaged, self-hostable release.
 - Security headers set at the origin (`nosniff`, `X-Frame-Options: DENY`,
   `Referrer-Policy`, COOP, and HSTS over HTTPS).
 
-[Unreleased]: https://github.com/damillano93/web-terminal/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/damillano93/web-terminal/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/damillano93/web-terminal/releases/tag/v0.2.0
 [0.1.1]: https://github.com/damillano93/web-terminal/releases/tag/v0.1.1

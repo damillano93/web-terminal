@@ -29,6 +29,7 @@ system of its own, nothing to host besides one Node process.
 - [Configuration](#configuration)
 - [Authentication](#authentication)
 - [Running as a service](#running-as-a-service)
+- [Updating](#updating)
 - [How it works](#how-it-works)
 - [Using it](#using-it)
 - [Linux app (optional)](#linux-app-optional)
@@ -332,6 +333,32 @@ Node binary: it links Homebrew libraries by absolute path and breaks on the next
 If macOS keeps asking for permission when a shell touches `~/Documents` or
 `~/Desktop`, `bash scripts/grant-fda.sh` walks you through giving that Node
 binary Full Disk Access.
+
+## Updating
+
+Releases are listed in [CHANGELOG.md](CHANGELOG.md) and on the
+[releases page](https://github.com/damillano93/web-terminal/releases). In the
+directory you cloned:
+
+```bash
+git pull                     # or a fixed release: git fetch --tags && git checkout v<version>
+npm install
+npm run build
+sudo systemctl restart web-terminal                        # Linux (systemd)
+launchctl kickstart -k gui/$(id -u)/com.you.web-terminal   # macOS (launchd)
+```
+
+Restarting the server keeps every open shell. Open pages reconnect by
+themselves; reload them (Ctrl+R / Cmd+R) to get the new frontend. Only if the
+changelog says `pty-host.js` changed, run `bash scripts/restart-pty-host.sh`,
+which **closes every shell**.
+
+With Docker: `git pull && docker compose up -d --build` (the shells live in the
+container, so this ends them).
+
+The apps update apart from the server: the Mac app by running its install line
+again, the Linux app by installing the new `.deb` from the latest release
+(`sudo apt install ./web-terminal_all.deb`).
 
 ### Behind a reverse proxy
 

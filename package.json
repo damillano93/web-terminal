@@ -1,6 +1,6 @@
 {
   "name": "web-terminal",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Browser terminal: ttyd-like backend (PTY + WebSocket + cookie auth) with an xterm.js frontend (ghostty-web optional) and split panes.",
   "type": "commonjs",
