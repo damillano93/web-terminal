@@ -3140,13 +3140,17 @@ function fmtDuration(ms) {
 // toast when the page itself is in front. Nothing when the pane is on screen.
 // `explicit` marks notifications a program asked for (OSC 9 / 777).
 function notify(pane, title, body, explicit) {
-  if (pane.isOnScreen()) return;
+  // A visible but unfocused window (behind another app) is not "looking":
+  // document.hidden stays false there, notably in WebKitGTK (Linux app).
+  // The iOS/Mac app is left as it was; WKWebView's focus is not reliable.
+  const unfocused = !(IS_NATIVE && window.__WT_NATIVE__.platform === "ios") && !document.hasFocus();
+  if (pane.isOnScreen() && !unfocused) return;
   const t = tabOfPane(pane);
   const where = t ? tabDisplayName(t) : "Terminal";
   const fullTitle = `${where} · ${title}`;
   if (IS_NATIVE) {
     nativePost({ type: "notify", title: fullTitle, body, tabId: t ? t.id : null, workspace: WORKSPACE_ID });
-  } else if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+  } else if ((document.hidden || unfocused) && "Notification" in window && Notification.permission === "granted") {
     try {
       const n = new Notification(fullTitle, { body, tag: "wt-" + (t ? t.id : "x"), icon: "/icons/icon-192.png" });
       n.onclick = () => { window.focus(); if (t) activateTab(t.id); n.close(); };
